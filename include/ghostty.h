@@ -1404,9 +1404,13 @@ GHOSTTY_API void ghostty_surface_tmux_command(ghostty_surface_t, const char*, ui
 GHOSTTY_API void ghostty_surface_tmux_command_with_reply(ghostty_surface_t, const char*, uintptr_t, uint32_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-command-with-reply)
 GHOSTTY_API bool ghostty_surface_tmux_active(ghostty_surface_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-active)
 GHOSTTY_API void ghostty_surface_tmux_resume(ghostty_surface_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-resume)
+GHOSTTY_API void ghostty_surface_tmux_resume_prioritized(ghostty_surface_t, uintptr_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-resume-prioritized)
 GHOSTTY_API void ghostty_surface_tmux_resume_abort(ghostty_surface_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-resume-abort)
 GHOSTTY_API void ghostty_surface_tmux_recover(ghostty_surface_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-recover)
 GHOSTTY_API void ghostty_surface_tmux_reset(ghostty_surface_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-reset)
+// Active-first form of tmux_reset. The selected tmux window is recovered before
+// other windows; background recovery remains interruptible between commands.
+GHOSTTY_API void ghostty_surface_tmux_reset_prioritized(ghostty_surface_t, uintptr_t); // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-tmux-reset-prioritized)
 // Re-send the resync probe on a gateway already waiting for its marker; no-op
 // otherwise. Unlike tmux_resume this NEVER creates a viewer or enters control
 // mode, so it is safe to queue on a cadence without tracking in-flight messages.

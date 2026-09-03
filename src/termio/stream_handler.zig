@@ -301,6 +301,12 @@ pub const StreamHandler = struct {
     /// ROOTSHELL-TMUX (id=streamhandler-resume-pending-field)
     tmux_resume_pending: bool = false,
 
+    /// Restored local selection carried by the first resume message. Consumed
+    /// with tmux_resume_pending when the synthetic control-mode entry creates
+    /// its viewer, so cold recovery can schedule that window first.
+    /// ROOTSHELL-TMUX (id=streamhandler-resume-priority)
+    tmux_resume_preferred_window: ?usize = null,
+
     /// Atomic mirror of tmux control-mode internals for the iOS debug snapshot
     /// (`ghostty_surface_tmux_debug_snapshot`). Written by the IO thread at tmux
     /// event sites via `refreshTmuxDebug` (only once the app has opted in), read
@@ -415,6 +421,7 @@ pub const StreamHandler = struct {
             if (self.tmux_control_mode and !config.tmux_control_mode) {
                 // See id=streamhandler-resume-pending-clear.
                 self.tmux_resume_pending = false;
+                self.tmux_resume_preferred_window = null;
                 if (self.tmux_viewer) |viewer| {
                     self.sendEmptyTopologySnapshot();
                     viewer.deinit();
@@ -676,6 +683,7 @@ pub const StreamHandler = struct {
         // `tmux -CC attach`) into resync and drain its clean startup
         // handshake as stale bytes. ROOTSHELL-TMUX (id=streamhandler-resume-pending-clear)
         self.tmux_resume_pending = false;
+        self.tmux_resume_preferred_window = null;
         const viewer = self.tmux_viewer orelse return;
         // Error pending app queries back before the queue dies with the
         // viewer. ROOTSHELL-TMUX (id=streamhandler-query-command)
@@ -1371,7 +1379,7 @@ pub const StreamHandler = struct {
                     .list_windows => 1,
                     .pane_history => 2,
                     .pane_visible => 3,
-                    .pane_state => 4,
+                    .pane_state, .window_pane_state => 4,
                     .tmux_version => 5,
                     .subscribe_titles => 6,
                     .pane_mode_query => 7,
@@ -1519,20 +1527,23 @@ pub const StreamHandler = struct {
     /// The caller (Thread) then feeds `ESC P 1000 p` into the stream. Keeping the
     /// gate here lets Thread stay agnostic of the tmux build flag. ROOTSHELL-TMUX
     /// (id=streamhandler-resume-should-enter)
-    pub fn tmuxResumeShouldEnter(self: *StreamHandler) bool {
+    pub fn tmuxResumeShouldEnter(self: *StreamHandler, preferred_window: ?usize) bool {
         if (comptime !tmux_enabled) return false;
         if (!self.tmux_control_mode) return false;
         if (self.tmux_viewer != null) return false;
         self.tmux_resume_pending = true;
+        self.tmux_resume_preferred_window = preferred_window;
         return true;
     }
 
     /// Per-probe nonce for the dead-shell echo matcher. ROOTSHELL-TMUX
     /// (id=streamhandler-detach-echo)
     const ProbeNonce = [terminal.tmux.ProbeEchoMatcher.nonce_len]u8;
-    const ResyncProbeBuf = [terminal.tmux.Viewer.resync_probe_prefix.len +
-        terminal.tmux.ProbeEchoMatcher.nonce_len +
-        terminal.tmux.Viewer.resync_probe_suffix.len]u8;
+    const ResyncProbeBuf = [
+        terminal.tmux.Viewer.resync_probe_prefix.len +
+            terminal.tmux.ProbeEchoMatcher.nonce_len +
+            terminal.tmux.Viewer.resync_probe_suffix.len
+    ]u8;
 
     /// Build a resync probe command carrying a fresh random nonce into `buf`,
     /// returning the full command slice (writeReq copies it, so the stack
@@ -1661,7 +1672,7 @@ pub const StreamHandler = struct {
     /// `.command_queue` state. Runs on the IO thread; the read path holds the
     /// renderer mutex, so `messageWriter` is safe.
     /// ROOTSHELL-TMUX (id=streamhandler-force-reset)
-    pub fn tmuxForceReset(self: *StreamHandler) void {
+    pub fn tmuxForceReset(self: *StreamHandler, preferred_window: ?usize) void {
         if (comptime !tmux_enabled) return;
         const viewer = self.tmux_viewer orelse return;
         // Always record the intent first. If a resync is ALREADY in flight (e.g. a
@@ -1670,7 +1681,7 @@ pub const StreamHandler = struct {
         // `reset_pending` and upgrades itself into a full recapture, so a discard
         // landing during the resync probe window is never dropped. A real
         // `forceReset` below clears the flag. ROOTSHELL-TMUX (id=streamhandler-force-reset)
-        viewer.requestReset();
+        viewer.requestResetPrioritized(preferred_window);
         if (!viewer.isCommandQueue()) return;
         log.warn("tmux output discard detected; forcing full surface reset + recapture", .{});
         var probe_buf: ResyncProbeBuf = undefined;
@@ -1687,7 +1698,7 @@ pub const StreamHandler = struct {
         // Error pending app queries back before forceReset clears the
         // command queue. ROOTSHELL-TMUX (id=streamhandler-query-command)
         self.failPendingTmuxQueries(viewer);
-        viewer.forceReset();
+        viewer.forceResetPrioritized(preferred_window);
         // Realign the parser to a clean line boundary (the live stream may resume
         // mid-line after data loss) so it does not break on the next byte.
         self.dcs.beginTmuxResync();
@@ -1766,6 +1777,7 @@ pub const StreamHandler = struct {
     pub fn tmuxResumeAbort(self: *StreamHandler) void {
         if (comptime !tmux_enabled) return;
         self.tmux_resume_pending = false;
+        self.tmux_resume_preferred_window = null;
         if (self.tmux_viewer) |viewer| {
             // Error pending app queries back before the queue dies with the
             // viewer. ROOTSHELL-TMUX (id=streamhandler-query-command)
@@ -2118,7 +2130,9 @@ pub const StreamHandler = struct {
                         // rebuild that reprojects the windows/panes.
                         if (self.tmux_resume_pending) {
                             self.tmux_resume_pending = false;
-                            viewer.enterResync();
+                            const preferred_window = self.tmux_resume_preferred_window;
+                            self.tmux_resume_preferred_window = null;
+                            viewer.enterResyncPrioritized(preferred_window);
                             // Realign the control parser to a clean line boundary:
                             // the live stream resumes mid-line, so without this the
                             // parser's `.idle` "non-'%' => broken" rule trips on the

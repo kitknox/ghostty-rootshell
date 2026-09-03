@@ -92,6 +92,12 @@ tmux_mutex: std.Io.Mutex = .init,
 /// message and the pipe read otherwise race to tmux_mutex in either order).
 tmux_reset_pending: std.atomic.Value(bool) = .init(false),
 
+/// Preferred tmux window for the pending full reset. `maxInt(usize)` means the
+/// legacy no-preference behavior. Published before tmux_reset_pending so the
+/// read-side reset barrier observes a coherent request.
+/// ROOTSHELL-TMUX (id=termio-tmux-reset-priority)
+tmux_reset_preferred_window: std.atomic.Value(usize) = .init(std.math.maxInt(usize)),
+
 /// Last time the cursor was reset. This is used to prevent message
 /// flooding with cursor resets.
 last_cursor_reset: ?std.Io.Timestamp = null,
@@ -852,7 +858,8 @@ fn processOutputTmuxPrefix(self: *Termio, buf: []const u8) ?[]const u8 {
             self.tmux_reset_pending.cmpxchgStrong(true, false, .acquire, .monotonic) == null)
         {
             h.tmux_unlocked_io = true;
-            h.tmuxForceReset();
+            const preferred_raw = self.tmux_reset_preferred_window.load(.acquire);
+            h.tmuxForceReset(if (preferred_raw == std.math.maxInt(usize)) null else preferred_raw);
             h.tmux_unlocked_io = false;
         }
 

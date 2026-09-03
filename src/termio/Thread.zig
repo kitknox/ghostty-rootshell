@@ -445,7 +445,7 @@ fn drainMailbox(
                 defer io.terminal_stream.handler.tmux_unlocked_io = false;
                 io.terminal_stream.handler.tmuxDetach();
             },
-            .tmux_resume => { // ROOTSHELL-TMUX (id=thread-resume)
+            .tmux_resume => |preferred_window| { // ROOTSHELL-TMUX (id=thread-resume)
                 // Hold the renderer mutex around the whole arm, exactly like the
                 // read path's unhooked branch: the `.enter` dispatch mutates the
                 // gateway terminal (prints the gateway menu) and messageWriter's
@@ -461,7 +461,7 @@ fn drainMailbox(
                 // id=streamhandler-unlocked-io).
                 io.terminal_stream.handler.tmux_unlocked_io = true;
                 defer io.terminal_stream.handler.tmux_unlocked_io = false;
-                if (io.terminal_stream.handler.tmuxResumeShouldEnter()) {
+                if (io.terminal_stream.handler.tmuxResumeShouldEnter(preferred_window)) {
                     // First resume: synthesize control-mode entry. Feeding
                     // `ESC P 1000 p` drives the VT parser into DCS passthrough and
                     // fires the `.enter` dispatch, which creates the viewer (in
@@ -550,7 +550,10 @@ fn drainMailbox(
                 ) == null) {
                     io.terminal_stream.handler.tmux_unlocked_io = true;
                     defer io.terminal_stream.handler.tmux_unlocked_io = false;
-                    io.terminal_stream.handler.tmuxForceReset();
+                    const preferred_raw = io.tmux_reset_preferred_window.load(.acquire);
+                    io.terminal_stream.handler.tmuxForceReset(
+                        if (preferred_raw == std.math.maxInt(usize)) null else preferred_raw,
+                    );
                 }
             },
             .tmux_force_exit => { // ROOTSHELL-TMUX (id=thread-force-exit)

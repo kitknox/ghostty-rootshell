@@ -134,6 +134,43 @@ These must remain byte-stable. Mirror any change in `rootshell`.
   rebuilt identical to a fresh `tmux -CC attach` plus full content — no duplicated
   scrollback, no tab flicker. Called when the app's tssh transport reports a
   non-recoverable output discard,
+  `ghostty_surface_tmux_reset_prioritized`
+  (`id=embedded-tmux-reset-prioritized`) — append-only active-first form of the
+  reset ABI. The app supplies its locally selected tmux window id. After the
+  clean-stream marker the viewer reuses already-valid live metadata (re-sending
+  client size first when it changed after the last acknowledgement), refreshes
+  authoritative topology, fully recaptures that window (all split panes), and
+  applies window-scoped pane state so it becomes interactive independently.
+  Other windows recover one command at a time in the background; the exact
+  Rootshell `select-window -t @N` relay reprioritizes unfinished work after the
+  currently streaming command. Any ordinary tracked command between capture
+  steps rewinds partial jobs; a pane moving between windows also rewinds its job
+  and invalidates a displaced in-flight capture. This prevents live gated output
+  from opening a gap between snapshots. Window-scoped state applies only to jobs
+  whose four captures are complete, so a pane added while that command is in
+  flight cannot bypass capture. History-only intermediate frames do not wake pane
+  renderers; the coherent visible/state boundary performs the redraw, avoiding
+  duplicate scrollback flashes during attach. The legacy reset remains the
+  no-preference compatibility entry point,
+  `ghostty_surface_tmux_resume_prioritized`
+  (`id=embedded-tmux-resume-prioritized`) — cold-launch counterpart carrying
+  the restored locally selected window into the fresh viewer. Newly discovered
+  panes enter the same incremental scheduler, so the selected restored tab is
+  interactive before background tabs finish their history captures. The first
+  focus reconcile also uses that local preference instead of tmux's possibly
+  different server-active window, so the new Swift controller cannot navigate
+  away from the pane being recovered. Panes created during incremental recovery
+  queue their OSC 10/11 color reports at admission, ahead of capture, so tmux can
+  answer queries issued immediately by the new process. Rootshell
+  skips the hidden gateway's saved ANSI replay (projected panes are rebuilt from
+  tmux) and keeps restored tssh output gated until
+  `ghostty_surface_tmux_active` confirms this viewer is armed. Only then are
+  buffered control records released, so a fast roaming reattach cannot render
+  raw `%output` lines through the gateway shell. Rootshell arms this path only
+  when tssh reports that the old PTY actually resumed; a fresh-spawn fallback
+  clears the saved gateway projection and rejoins the ordinary shell scrollback
+  path, preserving its layout-deferred token until a correctly sized callback
+  claims it exactly once,
   `ghostty_surface_tmux_force_exit` (`id=embedded-tmux-force-exit`) — the
   watchdog's give-up path: forcibly exits control mode LOCALLY (tears down the
   viewer, emits the empty-topology snapshot so the app prunes via the normal
@@ -183,15 +220,17 @@ These must remain byte-stable. Mirror any change in `rootshell`.
 **Verify the ABI** (from the `ghostty-dec20` repo, after a build):
 ```bash
 nm macos/GhosttyKitAppStore.xcframework/ios-arm64/libghostty-internal.a \
-  | grep -E '_ghostty_(tmux|surface_new_tmux|surface_tmux_(set_client|detach|command|active|resume|recover|reset|reprobe|force_exit))' | sort -u
+  | grep -E '_ghostty_(tmux|surface_new_tmux|surface_tmux_(set_client|detach|command|active|resume|resume_prioritized|recover|reset|reset_prioritized|reprobe|force_exit))' | sort -u
 ```
-Expect 17 `T` (defined text) symbols:
+Expect 19 `T` (defined text) symbols:
 `_ghostty_surface_new_tmux_pane`, `_ghostty_surface_tmux_set_client_size`,
 `_ghostty_surface_tmux_detach`, `_ghostty_surface_tmux_command`,
 `_ghostty_surface_tmux_command_with_reply`,
 `_ghostty_surface_tmux_active`, `_ghostty_surface_tmux_resume`,
+`_ghostty_surface_tmux_resume_prioritized`,
 `_ghostty_surface_tmux_resume_abort`, `_ghostty_surface_tmux_recover`,
-`_ghostty_surface_tmux_reset`, `_ghostty_surface_tmux_reprobe`,
+`_ghostty_surface_tmux_reset`, `_ghostty_surface_tmux_reset_prioritized`,
+`_ghostty_surface_tmux_reprobe`,
 `_ghostty_surface_tmux_force_exit`, `_ghostty_tmux_layout_child`,
 `_ghostty_tmux_layout_info`, `_ghostty_tmux_reconcile_free`,
 `_ghostty_tmux_reconcile_op`, `_ghostty_tmux_reconcile_op_count`. Also
@@ -262,7 +301,7 @@ grep -rn 'ROOTSHELL-TMUX' src/ include/ | grep -oE 'id=[a-z0-9-]+' | sort -u
 | File | ids |
 |------|-----|
 | `src/apprt/action.zig` | `action-reconcile-variant` (FROZEN), `action-key-variant` (FROZEN), `action-reconcile-struct` (FROZEN) |
-| `src/apprt/embedded.zig` | `embedded-capi-reconcile` (FROZEN), `embedded-new-tmux-pane` (FROZEN), `embedded-set-client-size` (FROZEN), `embedded-tmux-detach` (FROZEN), `embedded-tmux-command` (FROZEN), `embedded-tmux-active` (FROZEN), `embedded-tmux-resume-abort` (FROZEN), `embedded-tmux-recover` (FROZEN), `embedded-tmux-reset` (FROZEN), `embedded-tmux-reprobe` (FROZEN), `embedded-tmux-force-exit` (FROZEN), `embedded-tmux-flush-deferred` (FROZEN), `embedded-new-tmux-pane-fn`, `embedded-init-tmux-pane-fn`, `embedded-relay-field`, `embedded-relay-deinit`, `embedded-ui-terminal-arm` |
+| `src/apprt/embedded.zig` | `embedded-capi-reconcile` (FROZEN), `embedded-new-tmux-pane` (FROZEN), `embedded-set-client-size` (FROZEN), `embedded-tmux-detach` (FROZEN), `embedded-tmux-command` (FROZEN), `embedded-tmux-active` (FROZEN), `embedded-tmux-resume-prioritized` (FROZEN), `embedded-tmux-resume-abort` (FROZEN), `embedded-tmux-recover` (FROZEN), `embedded-tmux-reset` (FROZEN), `embedded-tmux-reset-prioritized` (FROZEN), `embedded-tmux-reprobe` (FROZEN), `embedded-tmux-force-exit` (FROZEN), `embedded-tmux-flush-deferred` (FROZEN), `embedded-new-tmux-pane-fn`, `embedded-init-tmux-pane-fn`, `embedded-relay-field`, `embedded-relay-deinit`, `embedded-ui-terminal-arm` |
 | `src/apprt/surface.zig` | `apprt-surface-tmux-types-extracted`, `apprt-msg-topology`, `apprt-msg-write`, `apprt-msg-focus`, `apprt-msg-title`, `apprt-relay-writer` |
 | `src/Surface.zig` | `surface-reconcile-extracted`, `surface-initoptions-backend`, `surface-init-backend-select`, `surface-arm-topology`, `surface-arm-write`, `surface-send-keys-untracked`, `surface-paste-atomic`, `surface-arm-focus`, `surface-arm-title` |
 | `src/termio/stream_handler.zig` | `streamhandler-viewer-field`, `streamhandler-force-unhook-field`, `streamhandler-deinit-viewer`, `streamhandler-changeconfig-disable`, `streamhandler-changeconfig-colors`, `streamhandler-set-client-size`, `streamhandler-pump-command-queue`, `streamhandler-write-tracked-command`, `streamhandler-record-tracked`, `streamhandler-record-untracked`, `streamhandler-pane-command`, `streamhandler-detach`, `streamhandler-tmux-active`, `streamhandler-tmux-active-flag`, `streamhandler-dcs-ground`, `streamhandler-block-fifo-filter`, `streamhandler-command-tracked`, `streamhandler-windows-empty-guard`, `streamhandler-dcs-dispatch`, `streamhandler-broken-control-unhook`, `streamhandler-tmux-teardown`, `streamhandler-gateway-menu`, `streamhandler-suppress-gateway-reports`, `snapshot-feed-pane-titles`, `streamhandler-resume-resend-probe`, `streamhandler-resume-abort`, `streamhandler-force-resync`, `streamhandler-force-reset`, `streamhandler-force-exit`, `streamhandler-unlocked-io`, `streamhandler-post-exit-drain`, `tmux-debug-mirror`, `tmux-debug-snapshot-struct` (FROZEN), `tmux-debug-read-progress`, `viewer-cursor-style-default`, `streamhandler-detach-echo` |
@@ -276,7 +315,7 @@ grep -rn 'ROOTSHELL-TMUX' src/ include/ | grep -oE 'id=[a-z0-9-]+' | sort -u
 | `src/termio.zig` | `termio-tmux-export` |
 | `src/termio/mailbox.zig` | `mailbox-send-bounded` |
 | `src/config/Config.zig` | `config-tmux-control-mode` |
-| `include/ghostty.h` | `ghostty-h-action-enum` (FROZEN), `ghostty-h-reconcile` (FROZEN), `ghostty-h-set-client-size` (FROZEN), `ghostty-h-tmux-detach` (FROZEN), `ghostty-h-tmux-command` (FROZEN), `ghostty-h-tmux-active` (FROZEN), `ghostty-h-tmux-resume` (FROZEN), `ghostty-h-tmux-resume-abort` (FROZEN), `ghostty-h-tmux-recover` (FROZEN), `ghostty-h-tmux-reset` (FROZEN), `ghostty-h-tmux-force-exit` (FROZEN), `ghostty-h-tmux-flush-deferred` (FROZEN), `ghostty-h-tmux-debug-snapshot` (FROZEN) |
+| `include/ghostty.h` | `ghostty-h-action-enum` (FROZEN), `ghostty-h-reconcile` (FROZEN), `ghostty-h-set-client-size` (FROZEN), `ghostty-h-tmux-detach` (FROZEN), `ghostty-h-tmux-command` (FROZEN), `ghostty-h-tmux-active` (FROZEN), `ghostty-h-tmux-resume` (FROZEN), `ghostty-h-tmux-resume-prioritized` (FROZEN), `ghostty-h-tmux-resume-abort` (FROZEN), `ghostty-h-tmux-recover` (FROZEN), `ghostty-h-tmux-reset` (FROZEN), `ghostty-h-tmux-reset-prioritized` (FROZEN), `ghostty-h-tmux-force-exit` (FROZEN), `ghostty-h-tmux-flush-deferred` (FROZEN), `ghostty-h-tmux-debug-snapshot` (FROZEN) |
 
 ---
 

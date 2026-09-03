@@ -2632,9 +2632,18 @@ pub const CAPI = struct {
     // already active. Keep the signature stable. reapply: re-add this export
     // inside the CAPI struct. See docs/tmux-control-mode-fork.md.
     export fn ghostty_surface_tmux_resume(surface: *Surface) void {
-        surface.core_surface.io.queueMessage(.{ .tmux_resume = {} }, .unlocked);
+        surface.core_surface.io.queueMessage(.{ .tmux_resume = null }, .unlocked);
     }
     // ROOTSHELL-TMUX END FROZEN-ABI (id=embedded-tmux-resume)
+
+    // ROOTSHELL-TMUX BEGIN FROZEN-ABI (id=embedded-tmux-resume-prioritized)
+    // Cold-resume variant carrying the restored locally selected tmux window.
+    // Unlike a follow-up reset message, keeping the preference in the resume
+    // mailbox item cannot race the fresh viewer's creation.
+    export fn ghostty_surface_tmux_resume_prioritized(surface: *Surface, window_id: usize) void {
+        surface.core_surface.io.queueMessage(.{ .tmux_resume = window_id }, .unlocked);
+    }
+    // ROOTSHELL-TMUX END FROZEN-ABI (id=embedded-tmux-resume-prioritized)
 
     // ROOTSHELL-TMUX BEGIN FROZEN-ABI (id=embedded-tmux-resume-abort)
     // ghostty_surface_tmux_resume_abort aborts an in-progress resume started by
@@ -2685,10 +2694,21 @@ pub const CAPI = struct {
         // so the reset is ordered ahead of a foreground replay of gapped
         // output. The mailbox message remains the fallback executor when no
         // further bytes arrive to trigger the read-side consume.
+        surface.core_surface.io.tmux_reset_preferred_window.store(std.math.maxInt(usize), .release);
         surface.core_surface.io.tmux_reset_pending.store(true, .release);
         surface.core_surface.io.queueMessage(.{ .tmux_reset = {} }, .unlocked);
     }
     // ROOTSHELL-TMUX END FROZEN-ABI (id=embedded-tmux-reset)
+
+    // ROOTSHELL-TMUX BEGIN FROZEN-ABI (id=embedded-tmux-reset-prioritized)
+    // Append-only active-first reset ABI. The read-thread barrier consumes the
+    // preferred window together with the reset before any gapped replay bytes.
+    export fn ghostty_surface_tmux_reset_prioritized(surface: *Surface, window_id: usize) void {
+        surface.core_surface.io.tmux_reset_preferred_window.store(window_id, .release);
+        surface.core_surface.io.tmux_reset_pending.store(true, .release);
+        surface.core_surface.io.queueMessage(.{ .tmux_reset = {} }, .unlocked);
+    }
+    // ROOTSHELL-TMUX END FROZEN-ABI (id=embedded-tmux-reset-prioritized)
 
     // ROOTSHELL-TMUX BEGIN FROZEN-ABI (id=embedded-tmux-reprobe)
     // ghostty_surface_tmux_reprobe re-sends the resync probe on a gateway that is

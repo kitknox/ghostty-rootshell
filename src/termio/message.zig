@@ -150,7 +150,9 @@ pub const Message = union(enum) {
     /// viewer into the resync state to drain the reattached stream and rebuild
     /// the topology. No-op when no resume is appropriate (tmux disabled, viewer
     /// already active). See `Thread` `.tmux_resume` + `StreamHandler.enterResync`.
-    tmux_resume: void, // ROOTSHELL-TMUX (id=termio-msg-resume)
+    /// Optional locally selected tmux window to recover first on a cold app
+    /// restoration. Nil preserves the legacy server-active startup order.
+    tmux_resume: ?usize, // ROOTSHELL-TMUX (id=termio-msg-resume)
 
     /// Abort an in-progress tmux control-mode resume (the app's resume watchdog
     /// fired because no reconcile arrived: tmux died / the session expired / the

@@ -257,6 +257,10 @@ pub fn threadEnter(
     if (self.viewer_terminal) |vt| {
         io.renderer_state.mutex.lockUncancelable(global.io());
         defer io.renderer_state.mutex.unlock(global.io());
+        // occlusionCallback updates whichever terminal is currently published
+        // under this same mutex. Copy from the relay terminal before replacing
+        // it so a tab switch racing this handoff wins in either ordering.
+        vt.flags.visible = io.renderer_state.terminal.flags.visible;
         io.renderer_state.terminal = vt;
     }
 

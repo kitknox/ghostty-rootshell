@@ -134,6 +134,7 @@ pub fn init(
     renderer_impl: *rendererpkg.Renderer,
     state: *rendererpkg.State,
     app_mailbox: App.Mailbox,
+    initially_visible: bool,
 ) !Thread {
     // Create our event loop.
     var loop = try xev.Loop.init(.{});
@@ -177,6 +178,7 @@ pub fn init(
         .state = state,
         .mailbox = mailbox,
         .app_mailbox = app_mailbox,
+        .flags = .{ .visible = initially_visible },
     };
 
     // Only enable compression if we have it enabled... save some

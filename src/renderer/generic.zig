@@ -795,7 +795,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 .grid_metrics = font_critical.metrics,
                 .size = options.size,
                 .focused = true,
-                .visible = true,
+                .visible = options.initially_visible,
                 .scrollbar = .zero,
                 .scrollbar_dirty = false,
                 .last_bottom_node = null,

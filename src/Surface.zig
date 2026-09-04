@@ -484,6 +484,7 @@ const DerivedConfig = struct {
 /// a tmux control mode pane whose renderer reads from the viewer-owned
 /// pane terminal (single-terminal model).
 pub const InitOptions = struct {
+    initially_visible: bool = true,
     tmux_backend: ?termio.Tmux.Config = null, // ROOTSHELL-TMUX (id=surface-initoptions-backend)
 };
 
@@ -602,6 +603,7 @@ pub fn initWithOptions(
         .surface_mailbox = .{ .surface = self, .app = app_mailbox },
         .rt_surface = rt_surface,
         .thread = &self.renderer_thread,
+        .initially_visible = opts.initially_visible,
     });
     errdefer renderer_impl.deinit();
 
@@ -618,6 +620,7 @@ pub fn initWithOptions(
         &self.renderer,
         &self.renderer_state,
         app_mailbox,
+        opts.initially_visible,
     );
     errdefer render_thread.deinit();
 
@@ -659,6 +662,7 @@ pub fn initWithOptions(
         .io_thr = undefined,
         .size = size,
         .config = derived_config,
+        .visible = opts.initially_visible,
 
         // Our conditional state is initialized to the app state. This
         // lets us get the most likely correct color theme and so on.
@@ -767,6 +771,11 @@ pub fn initWithOptions(
     // Outside the block, IO has now taken ownership of our temporary state
     // so we can just defer this and not the subcomponents.
     errdefer self.io.deinit();
+
+    // Keep regular terminal visibility queries/reports consistent before its
+    // worker starts. The tmux backend applies the same value to its viewer-owned
+    // pane terminal while publishing that pointer in threadEnter.
+    self.io.terminal.flags.visible = opts.initially_visible;
 
     // Report initial cell size on surface creation
     _ = try rt_app.performAction(

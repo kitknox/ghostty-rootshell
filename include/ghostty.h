@@ -485,6 +485,7 @@ typedef struct {
   const char* initial_input;
   bool wait_after_command;
   bool use_external_io;
+  bool initially_visible;
   ghostty_surface_context_e context;
 } ghostty_surface_config_s;
 

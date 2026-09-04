@@ -22,3 +22,7 @@ rt_surface: *apprt.Surface,
 
 /// The renderer thread.
 thread: *renderer.Thread,
+
+/// Whether this renderer should start visible. Hidden embedded surfaces must
+/// not perform the unconditional initial draw and allocate a full swapchain.
+initially_visible: bool = true,

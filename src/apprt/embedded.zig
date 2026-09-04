@@ -540,6 +540,11 @@ pub const Surface = struct {
         /// scenarios like SSH sessions where the I/O is managed externally.
         use_external_io: bool = false,
 
+        /// Whether the surface renderer should start visible. Embedders that
+        /// already know a surface belongs to an inactive tab can disable its
+        /// initial draw and avoid allocating a full-size swapchain first.
+        initially_visible: bool = true,
+
         /// Context for the new surface
         context: apprt.surface.NewSurfaceContext = .window,
     };
@@ -658,12 +663,13 @@ pub const Surface = struct {
 
         // Initialize our surface right away. We're given a view that is
         // ready to use.
-        try self.core_surface.init(
+        try self.core_surface.initWithOptions(
             app.core_app.alloc,
             &config,
             app.core_app,
             app,
             self,
+            .{ .initially_visible = opts.initially_visible },
         );
         errdefer self.core_surface.deinit();
 
@@ -738,13 +744,16 @@ pub const Surface = struct {
             app.core_app,
             app,
             self,
-            .{ .tmux_backend = .{
-                .pane_id = pane_id,
-                .window_id = window_id,
-                .control_writer = relay.controlWriter(),
-                .viewer_terminal = viewer_terminal,
-                .viewer_pane = viewer_pane,
-            } },
+            .{
+                .initially_visible = opts.initially_visible,
+                .tmux_backend = .{
+                    .pane_id = pane_id,
+                    .window_id = window_id,
+                    .control_writer = relay.controlWriter(),
+                    .viewer_terminal = viewer_terminal,
+                    .viewer_pane = viewer_pane,
+                },
+            },
         );
         errdefer self.core_surface.deinit();
 

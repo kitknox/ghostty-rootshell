@@ -2893,6 +2893,14 @@ pub const CAPI = struct {
         return core_surface.renderer_state.terminal.modes.get(.cursor_keys);
     }
 
+    /// Returns whether focus event reporting (DEC mode 1004) is active.
+    export fn ghostty_surface_focus_event_mode(surface: *Surface) bool {
+        const core_surface = &surface.core_surface;
+        core_surface.renderer_state.mutex.lockUncancelable(global.io());
+        defer core_surface.renderer_state.mutex.unlock(global.io());
+        return core_surface.renderer_state.terminal.modes.get(.focus_event);
+    }
+
     /// Returns the total number of rows in the primary screen (including scrollback).
     /// This is a cheap check (single field read) useful for change detection.
     export fn ghostty_surface_total_rows(surface: *Surface) usize {

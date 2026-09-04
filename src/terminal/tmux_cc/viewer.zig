@@ -4400,10 +4400,10 @@ pub const Viewer = struct {
                 log.info("failed to parse list-panes line: {s}", .{line});
                 continue;
             };
-            const focus_flag_present = delimitedFieldNonEmpty(
+            const private_modes_present = delimitedFieldNonEmpty(
                 line,
                 Format.list_panes.delim,
-                comptime formatFieldIndex(Format.list_panes, .focus_flag),
+                comptime formatFieldIndex(Format.list_panes, .pane_private_modes),
             );
 
             // Get the pane for this ID
@@ -4646,11 +4646,17 @@ pub const Viewer = struct {
             else
                 .x10;
 
-            // Focus reporting. tmux < 3.5 lacks `focus_flag`, so the format
-            // field expands empty and parses as false. Do not let that clobber
-            // the pane's live focus-event mode.
-            if (focus_flag_present) {
-                t.modes.set(.focus_event, data.focus_flag);
+            // Focus reporting. `pane_private_modes` expands empty both on tmux
+            // without the variable (< 3.8) and when no modes are set. Only a
+            // server known to have it may treat empty as "no modes"; otherwise
+            // an empty field fails closed and leaves the live mode untouched.
+            const private_modes_authoritative = private_modes_present or
+                tmuxVersionAtLeast(self.tmux_version, 3, 8);
+            if (private_modes_authoritative) {
+                t.modes.set(
+                    .focus_event,
+                    output.privateModesContain(data.pane_private_modes, 1004),
+                );
             }
 
             // Force synchronized output (DECSET 2026) off. A completed
@@ -6476,8 +6482,9 @@ const Format = struct {
             .mouse_standard_flag,
             .mouse_utf8_flag,
             .mouse_sgr_flag,
-            // Focus & special features
-            .focus_flag,
+            // Focus reporting (mode 1004) is derived from pane_private_modes.
+            // Must not be the last field: a trailing string consumes rest().
+            .pane_private_modes,
             // bracketed_paste is requested for format-shape stability but its
             // value is deliberately IGNORED in receivedPaneState: tmux exposes
             // no such variable (`#{bracketed_paste}` expands to empty on every
@@ -7134,7 +7141,7 @@ fn firstCommandAction(actions: []const Viewer.Action) ?[]const u8 {
     return null;
 }
 
-test "pane_state leaves focus_event unchanged when tmux omits focus_flag" {
+test "pane_state leaves focus_event unchanged when pane_private_modes is empty" {
     var viewer = try Viewer.init(testing.io, testing.allocator, 80, 24);
     defer viewer.deinit();
     try driveStartupOneWindow(&viewer);
@@ -7143,6 +7150,7 @@ test "pane_state leaves focus_event unchanged when tmux omits focus_flag" {
     const t: *Terminal = &pane.terminal;
     t.modes.set(.focus_event, true);
 
+    // Empty field: tmux without the variable, or no modes set. Fail closed.
     try viewer.receivedPaneState(
         \\%0;10;2;0;;0;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;0;0;23;8,16
     ,
@@ -7150,12 +7158,58 @@ test "pane_state leaves focus_event unchanged when tmux omits focus_flag" {
     );
     try testing.expect(t.modes.get(.focus_event));
 
+    // Modes listed without 1004: focus reporting is authoritatively off.
     try viewer.receivedPaneState(
-        \\%0;10;2;0;;0;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;0;0;0;23;8,16
+        \\%0;10;2;0;;0;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;1,25;0;0;23;8,16
     ,
         null,
     );
     try testing.expect(!t.modes.get(.focus_event));
+
+    // Exact 1004 token among other modes turns it on.
+    try viewer.receivedPaneState(
+        \\%0;10;2;0;;0;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;1,1004,2004;0;0;23;8,16
+    ,
+        null,
+    );
+    try testing.expect(t.modes.get(.focus_event));
+
+    // A superstring token is not 1004.
+    try viewer.receivedPaneState(
+        \\%0;10;2;0;;0;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;11004;0;0;23;8,16
+    ,
+        null,
+    );
+    try testing.expect(!t.modes.get(.focus_event));
+}
+
+test "pane_state clears focus_event on empty pane_private_modes from tmux >= 3.8" {
+    var viewer = try Viewer.init(testing.io, testing.allocator, 80, 24);
+    defer viewer.deinit();
+    try driveStartupOneWindow(&viewer);
+    try viewer.receivedTmuxVersion("next-3.8");
+
+    const pane = viewer.panes.get(0).?;
+    const t: *Terminal = &pane.terminal;
+    t.modes.set(.focus_event, true);
+
+    // A server that has the variable reports empty only when no private
+    // modes are set, so the stale focus mode must be cleared.
+    try viewer.receivedPaneState(
+        \\%0;10;2;0;;0;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;0;0;23;8,16
+    ,
+        null,
+    );
+    try testing.expect(!t.modes.get(.focus_event));
+}
+
+test "tmuxVersionAtLeast handles release and next- prefixed versions" {
+    try testing.expect(tmuxVersionAtLeast("next-3.8", 3, 8));
+    try testing.expect(tmuxVersionAtLeast("3.8", 3, 8));
+    try testing.expect(tmuxVersionAtLeast("4.0", 3, 8));
+    try testing.expect(!tmuxVersionAtLeast("3.7c", 3, 8));
+    try testing.expect(!tmuxVersionAtLeast("3.5a", 3, 8));
+    try testing.expect(!tmuxVersionAtLeast("", 3, 8));
 }
 
 test "pane history retry cap survives capture-pending pane_state acquires" {
@@ -11942,7 +11996,7 @@ test "pane state alternate_saved cursor applies to primary screen" {
         //         alternate_saved_y;insert_flag;wrap_flag;keypad_flag;
         //         keypad_cursor_flag;origin_flag;mouse_all_flag;
         //         mouse_any_flag;mouse_button_flag;mouse_standard_flag;
-        //         mouse_utf8_flag;mouse_sgr_flag;focus_flag;
+        //         mouse_utf8_flag;mouse_sgr_flag;pane_private_modes;
         //         bracketed_paste;scroll_region_upper;scroll_region_lower;
         //         pane_tabs
         .{

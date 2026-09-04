@@ -130,8 +130,10 @@ pub const Variable = enum {
     cursor_x,
     /// Cursor Y position in pane.
     cursor_y,
-    /// 1 if focus reporting is enabled.
-    focus_flag,
+    /// Comma-separated DEC private mode numbers set in the pane (e.g.
+    /// `1,25,1004`). Empty when no modes are set or on tmux without the
+    /// variable (added after 3.7c). Use `privateModesContain` to query.
+    pane_private_modes,
     /// Pane insert flag.
     insert_flag,
     /// Pane keypad cursor flag.
@@ -200,7 +202,6 @@ pub const Variable = enum {
             .bracketed_paste,
             .cursor_blinking,
             .cursor_flag,
-            .focus_flag,
             .insert_flag,
             .keypad_cursor_flag,
             .keypad_flag,
@@ -240,6 +241,7 @@ pub const Variable = enum {
             .cursor_colour,
             .cursor_shape,
             .pane_mode,
+            .pane_private_modes,
             .pane_tabs,
             .version,
             .window_layout,
@@ -255,7 +257,6 @@ pub const Variable = enum {
             .bracketed_paste,
             .cursor_blinking,
             .cursor_flag,
-            .focus_flag,
             .insert_flag,
             .keypad_cursor_flag,
             .keypad_flag,
@@ -286,6 +287,7 @@ pub const Variable = enum {
             .cursor_colour,
             .cursor_shape,
             .pane_mode,
+            .pane_private_modes,
             .pane_tabs,
             .version,
             .window_layout,
@@ -294,6 +296,18 @@ pub const Variable = enum {
         };
     }
 };
+
+/// True if a `pane_private_modes` value lists `mode` as an exact
+/// comma-separated token (so `1004` never matches `11004`).
+pub fn privateModesContain(value: []const u8, mode: u16) bool {
+    var buf: [8]u8 = undefined;
+    const needle = std.fmt.bufPrint(&buf, "{d}", .{mode}) catch unreachable;
+    var it = std.mem.splitScalar(u8, value, ',');
+    while (it.next()) |token| {
+        if (std.mem.eql(u8, token, needle)) return true;
+    }
+    return false;
+}
 
 test "parse alternate_on" {
     try testing.expectEqual(true, try Variable.parse(.alternate_on, "1"));
@@ -468,11 +482,19 @@ test "parse cursor_blinking" {
     try testing.expectEqual(false, try Variable.parse(.cursor_blinking, "true"));
 }
 
-test "parse focus_flag" {
-    try testing.expectEqual(true, try Variable.parse(.focus_flag, "1"));
-    try testing.expectEqual(false, try Variable.parse(.focus_flag, "0"));
-    try testing.expectEqual(false, try Variable.parse(.focus_flag, ""));
-    try testing.expectEqual(false, try Variable.parse(.focus_flag, "true"));
+test "parse pane_private_modes" {
+    try testing.expectEqualStrings("1,25,1004", try Variable.parse(.pane_private_modes, "1,25,1004"));
+    try testing.expectEqualStrings("", try Variable.parse(.pane_private_modes, ""));
+}
+
+test "privateModesContain exact token match" {
+    try testing.expect(privateModesContain("1004", 1004));
+    try testing.expect(privateModesContain("1,25,1004,2004", 1004));
+    try testing.expect(!privateModesContain("1,25", 1004));
+    try testing.expect(!privateModesContain("11004", 1004));
+    try testing.expect(!privateModesContain("10041", 1004));
+    try testing.expect(!privateModesContain("100", 1004));
+    try testing.expect(!privateModesContain("", 1004));
 }
 
 test "parse mouse_all_flag" {

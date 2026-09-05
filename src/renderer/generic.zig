@@ -880,6 +880,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // Graphics API stuff
                 .api = api,
                 .swap_chain = swap_chain,
+                // CADisplayLink is created eagerly above. Retain it on the
+                // renderer so loopEnter can wire/start it and teardown can
+                // invalidate it. Leaving the default null silently falls back
+                // to unpaced output-driven presentation on iOS-family targets.
+                .display_link = display_link,
             };
 
             try result.initShaders();
@@ -1536,6 +1541,26 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 log.info("created display link", .{});
                 break :display_link result;
             };
+
+            // The eagerly-created iOS-family link needs its renderer wake
+            // callback too. The lazy macOS branch above only configures newly
+            // created CVDisplayLinks. Wire this before start() queues ticks on
+            // the main run loop, while the renderer thread's async is stable.
+            if (comptime builtin.os.tag == .ios or
+                builtin.os.tag == .maccatalyst or
+                builtin.os.tag == .visionos)
+            {
+                if (draw_now) |callback| {
+                    display_link.setOutputCallback(
+                        xev.Async,
+                        &displayLinkCallback,
+                        callback,
+                    ) catch |err| {
+                        log.warn("error configuring display link err={}", .{err});
+                        return;
+                    };
+                }
+            }
 
             // Also macOS-only: CADisplayLink auto-tracks its display and has no
             // setCurrentCGDisplay.

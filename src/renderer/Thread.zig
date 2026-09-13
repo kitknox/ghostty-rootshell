@@ -341,6 +341,15 @@ fn drainMailbox(self: *Thread) !void {
                     self.setQosClass();
                 }
 
+                // Reconcile the display link from the authoritative flags. On iOS
+                // setVisible(true) starts the link for any visible surface
+                // regardless of focus; on macOS it preserves the visible&&focused
+                // gate. Idempotent (start/stop no-op when already in that state).
+                //
+                // Must precede the forced present below: Renderer.drawFrame
+                // no-ops while the renderer's own visible flag is false.
+                self.renderer.setVisible(v);
+
                 // On ANY occlusion(true) — transition OR redundant — rebuild
                 // cells and FORCE a present. The app re-asserts occlusion(true)
                 // (a reliable, non-droppable core push) to recover a surface it
@@ -362,12 +371,6 @@ fn drainMailbox(self: *Thread) !void {
                     // so its !visible early-out doesn't fire.
                     _ = renderCallback(self, undefined, undefined, {});
                 }
-
-                // Reconcile the display link from the authoritative flags. On iOS
-                // setVisible(true) starts the link for any visible surface
-                // regardless of focus; on macOS it preserves the visible&&focused
-                // gate. Idempotent (start/stop no-op when already in that state).
-                self.renderer.setVisible(v);
 
                 // Note that we're explicitly today not stopping any
                 // cursor timers, draw timers, etc. These things have very

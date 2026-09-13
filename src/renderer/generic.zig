@@ -1456,7 +1456,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         ///
         /// Must be called on the render thread.
         pub fn setVisible(self: *Self, visible: bool) void {
-            self.visible = visible;
+            // drawFrame reads this from app-thread callers under draw_mutex.
+            // Released before releaseGpuResources, which locks it again.
+            {
+                self.draw_mutex.lockUncancelable(global.io());
+                defer self.draw_mutex.unlock(global.io());
+                self.visible = visible;
+            }
             // iOS/visionOS: occlusion is the reliable, non-droppable signal;
             // focus delivery is gated and droppable. A visible surface keeps its
             // link running REGARDLESS of focus — else a dropped/raced focus(true)
@@ -2121,6 +2127,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // only the case while unrealized (GTK); displayRealized
             // rebuilds the swap chain.
             if (!self.display_realized) return;
+
+            // Hidden surfaces must never draw or rebuild the released swap
+            // chain. The app-thread display callback (layer bounds change)
+            // and ghostty_surface_draw bypass Thread.drawFrame's gate.
+            if (!self.visible) return;
 
             // Get our swap chain, rebuilding it if it was released
             // while we were hidden. Rebuilding is deferred to draw

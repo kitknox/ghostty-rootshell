@@ -774,6 +774,14 @@ typedef struct {
   uint32_t height;
 } ghostty_action_cell_size_s;
 
+// apprt.action.PtyResize
+typedef struct {
+  uint32_t rows;
+  uint32_t cols;
+  uint32_t width_px;
+  uint32_t height_px;
+} ghostty_action_pty_resize_s;
+
 // renderer.Health
 typedef enum {
   GHOSTTY_RENDERER_HEALTH_HEALTHY,
@@ -988,6 +996,7 @@ typedef enum {
   // Emitted after terminal content changes for one exact surface. Render-only
   // work such as cursor blinking does not emit this action.
   GHOSTTY_ACTION_SURFACE_CONTENT_CHANGED,
+  GHOSTTY_ACTION_PTY_RESIZE,
 } ghostty_action_tag_e;
 
 // ROOTSHELL-TMUX FROZEN-ABI (id=ghostty-h-session-actions): tmux session
@@ -1026,6 +1035,7 @@ typedef union {
   ghostty_action_size_limit_s size_limit;
   ghostty_action_initial_size_s initial_size;
   ghostty_action_cell_size_s cell_size;
+  ghostty_action_pty_resize_s pty_resize;
   ghostty_action_scrollbar_s scrollbar;
   ghostty_action_inspector_e inspector;
   ghostty_action_export_terminal_io_s export_terminal_io;

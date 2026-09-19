@@ -395,6 +395,11 @@ pub const Action = union(Key) {
     /// is always a surface; render-only animation does not emit this.
     surface_content_changed,
 
+    /// The IO thread applied a resize to the terminal (pipe backend only).
+    /// The external pty must be resized after this, never before, or the
+    /// application's redraw is parsed into the old grid.
+    pty_resize: PtyResize,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -476,6 +481,7 @@ pub const Action = union(Key) {
         tmux_session_changed,
         tmux_command_response,
         surface_content_changed,
+        pty_resize,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");
@@ -525,6 +531,8 @@ pub const Action = union(Key) {
 
     /// Returns the value type for the given key.
     pub fn Value(comptime key: Key) type {
+        // The rootshell variants push this scan past the default quota.
+        @setEvalBranchQuota(4000);
         inline for (@typeInfo(Action).@"union".fields) |field| {
             const field_key = @field(Key, field.name);
             if (field_key == key) return field.type;
@@ -783,6 +791,14 @@ pub const InitialSize = extern struct {
 pub const CellSize = extern struct {
     width: u32,
     height: u32,
+};
+
+// Sync with: ghostty_action_pty_resize_s
+pub const PtyResize = extern struct {
+    rows: u32,
+    cols: u32,
+    width_px: u32,
+    height_px: u32,
 };
 
 pub const SetTitle = struct {

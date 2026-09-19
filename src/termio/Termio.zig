@@ -600,6 +600,19 @@ pub fn resize(
         }
     }
 
+    // The pipe backend has no pty to resize above; the external layer owns
+    // it. Tell it now, after the terminal resized, so its pty resize (and the
+    // application's redraw) can never precede the grid.
+    if (self.backend == .pipe) {
+        const terminal_size = size.terminal();
+        _ = self.surface_mailbox.push(.{ .pty_resize = .{
+            .rows = grid_size.rows,
+            .cols = grid_size.columns,
+            .width_px = terminal_size.width,
+            .height_px = terminal_size.height,
+        } }, .{ .forever = {} });
+    }
+
     // Mail the renderer so that it can update the GPU and re-render
     _ = self.renderer_mailbox.push(global.io(), .{ .resize = size }, .{ .forever = {} });
     self.renderer_wakeup.notify() catch {};

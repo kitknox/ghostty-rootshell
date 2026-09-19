@@ -1253,6 +1253,12 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
 
         .renderer_health => |health| self.updateRendererHealth(health),
 
+        .pty_resize => |v| _ = try self.rt_app.performAction(
+            .{ .surface = self },
+            .pty_resize,
+            v,
+        ),
+
         .scrollbar => |scrollbar| self.updateScrollbar(scrollbar),
 
         .present_surface => try self.presentSurface(),

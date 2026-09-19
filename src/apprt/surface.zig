@@ -107,6 +107,9 @@ pub const Message = union(enum) {
     /// Health status change for the renderer.
     renderer_health: renderer.Health,
 
+    /// The IO thread resized the terminal; the external pty may follow.
+    pty_resize: apprt.action.PtyResize,
+
     /// Tell the surface to present itself to the user. This may require raising
     /// a window and switching tabs.
     present_surface: void,

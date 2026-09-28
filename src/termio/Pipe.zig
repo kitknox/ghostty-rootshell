@@ -170,7 +170,7 @@ pub fn threadEnter(
     // Spawn the read thread — it will read from master_fd on its own thread,
     // freeing the IO event loop thread to drain the termio mailbox concurrently.
     const read_thread = try std.Thread.spawn(
-        .{},
+        .{ .stack_size = internal_os.thread_stack_size_small },
         ReadThread.threadMainPosix,
         .{ self.master_fd, io, quit_pipe[0], &self.quit },
     );

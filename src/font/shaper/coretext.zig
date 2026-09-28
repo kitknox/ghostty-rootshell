@@ -210,7 +210,7 @@ pub const Shaper = struct {
 
         // Start the CF release thread.
         var cf_release_thr = try std.Thread.spawn(
-            .{},
+            .{ .stack_size = os.thread_stack_size_small },
             CFReleaseThread.threadMain,
             .{cf_release_thread},
         );

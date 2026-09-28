@@ -809,7 +809,7 @@ pub fn initWithOptions(
 
     // Start our renderer thread
     self.renderer_thr = try std.Thread.spawn(
-        .{},
+        .{ .stack_size = internal_os.thread_stack_size_large },
         rendererpkg.Thread.threadMain,
         .{&self.renderer_thread},
     );
@@ -817,7 +817,7 @@ pub fn initWithOptions(
 
     // Start our IO thread
     self.io_thr = try std.Thread.spawn(
-        .{},
+        .{ .stack_size = internal_os.thread_stack_size_large },
         termio.Thread.threadMain,
         .{ &self.io_thread, &self.io },
     );
@@ -6139,7 +6139,7 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
                 errdefer s.state.deinit();
 
                 s.thread = try .spawn(
-                    .{},
+                    .{ .stack_size = internal_os.thread_stack_size_large },
                     terminal.search.Thread.threadMain,
                     .{&s.state},
                 );

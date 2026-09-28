@@ -32,6 +32,11 @@ pub const shell = @import("shell.zig");
 pub const stderr = @import("stderr.zig");
 pub const uri = @import("uri.zig");
 
+// Per-surface thread stack sizes. Zig's 16 MB default reserves enough
+// address space per surface to exhaust it on iOS with many tabs.
+pub const thread_stack_size_large = 2 * 1024 * 1024;
+pub const thread_stack_size_small = 512 * 1024;
+
 // Functions and types
 pub const CFReleaseThread = @import("cf_release_thread.zig");
 pub const TempDir = @import("TempDir.zig");

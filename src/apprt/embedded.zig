@@ -1645,6 +1645,12 @@ pub const CAPI = struct {
         app.core_app.setSurfaceContentEventsEnabled(enabled);
     }
 
+    /// ROOTSHELL-PRESENT: allow or forbid GPU presentation for every surface.
+    /// Process-wide and callable from any thread.
+    export fn ghostty_presentation_set_allowed(allowed: bool) void {
+        renderer.presentation.setAllowed(allowed);
+    }
+
     /// Update the focused state of the app.
     export fn ghostty_app_set_focus(
         app: *App,

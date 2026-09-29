@@ -8,6 +8,7 @@ const objc = @import("objc");
 const macos = @import("macos");
 
 const IOSurface = macos.iosurface.IOSurface;
+const presentation = @import("../presentation.zig");
 
 const log = std.log.scoped(.IOSurfaceLayer);
 
@@ -160,6 +161,10 @@ fn setSurfaceCallback(
 
     // See explanation of why we retain and release in `setSurface`.
     defer surface.release();
+
+    // ROOTSHELL-PRESENT: this runs later on main; presentation may have been
+    // revoked since the frame completed.
+    if (!presentation.isAllowed()) return;
 
     // We check to see if the surface is the appropriate size for
     // the layer, if it's not then we discard it. This is because

@@ -278,6 +278,10 @@ pub fn needsConfirmQuit(self: *const App) bool {
 }
 
 /// Drain the mailbox.
+///
+/// ROOTSHELL-PRESENT: iOS keeps ticking this while backgrounded so parsing
+/// never parks on a full mailbox. Nothing here may draw on the calling
+/// thread; redraw_surface only emits the `.render` action.
 fn drainMailbox(self: *App, rt_app: *apprt.App) !void {
     while (self.mailbox.pop(global.io())) |message| {
         if (comptime std.log.logEnabled(.debug, .app)) {

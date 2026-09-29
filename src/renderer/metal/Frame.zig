@@ -12,6 +12,7 @@ const Target = @import("Target.zig");
 const RenderPass = @import("RenderPass.zig");
 
 const Health = @import("../../renderer.zig").Health;
+const presentation = @import("../presentation.zig");
 
 const log = std.log.scoped(.metal);
 
@@ -77,8 +78,9 @@ fn bufferCompleted(
         else => .healthy,
     };
 
-    // If the frame is healthy, present it.
-    if (health == .healthy) {
+    // If the frame is healthy, present it. ROOTSHELL-PRESENT: unless a
+    // revocation timed out waiting on this frame.
+    if (health == .healthy and presentation.isAllowed()) {
         // Call texture callback if registered (for visionOS curved display)
         // This allows Swift to access the IOSurface before it's presented
         if (block.renderer.api.rt_surface.texture_callback) |callback| {
@@ -117,6 +119,14 @@ pub inline fn renderPass(
 ///
 /// If `sync` is true, this will block until the frame is presented.
 pub inline fn complete(self: *Self, sync: bool) void {
+    // ROOTSHELL-PRESENT: the commit is exclusive with revocation. Revoked
+    // since admission: drop the encoded buffer uncommitted, so no GPU work.
+    if (!presentation.lockCommit()) {
+        presentation.unlockCommit();
+        self.block.renderer.frameCancelled();
+        return;
+    }
+
     // If we don't need to complete synchronously,
     // we add our block as a completion handler.
     //
@@ -131,6 +141,7 @@ pub inline fn complete(self: *Self, sync: bool) void {
     }
 
     self.buffer.msgSend(void, objc.sel("commit"), .{});
+    presentation.unlockCommit();
 
     // If we need to complete synchronously, we wait until
     // the buffer is completed and invoke the block directly.

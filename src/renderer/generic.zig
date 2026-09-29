@@ -2133,6 +2133,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // and ghostty_surface_draw bypass Thread.drawFrame's gate.
             if (!self.visible) return;
 
+            // ROOTSHELL-PRESENT: a backgrounded iOS app must never submit GPU
+            // work. The lease passes to frameCompleted once the frame commits.
+            if (!renderer.presentation.beginSubmit()) return;
+            var presentation_lease_handed_off = false;
+            defer if (!presentation_lease_handed_off) renderer.presentation.endSubmit();
+
             // Get our swap chain, rebuilding it if it was released
             // while we were hidden. Rebuilding is deferred to draw
             // time because resource creation must happen somewhere
@@ -2293,6 +2299,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // Retire it only after complete has submitted the successful frame.
             var frame_encoded = false;
             defer {
+                // Every committed frame reaches frameCompleted, which ends the lease.
+                presentation_lease_handed_off = true;
                 frame_ctx.complete(sync);
                 self.cursor_animation_active = cursorAnimationPendingAfterFrame(
                     self.cursor_animation_active,
@@ -2458,6 +2466,17 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // waiting for all in-flight frames to complete, and this
             // callback is what signals that completion.
             self.swap_chain.?.releaseFrame();
+
+            // ROOTSHELL-PRESENT: after the present above, so a revocation that
+            // waited on this frame returns only once it is fully done.
+            renderer.presentation.endSubmit();
+        }
+
+        /// ROOTSHELL-PRESENT: the graphics API dropped an encoded frame
+        /// uncommitted because presentation was revoked. Health is unchanged.
+        pub fn frameCancelled(self: *Self) void {
+            self.swap_chain.?.releaseFrame();
+            renderer.presentation.endSubmit();
         }
 
         /// Call this any time the background image path changes.

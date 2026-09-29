@@ -1267,6 +1267,10 @@ GHOSTTY_API void ghostty_app_set_color_scheme(ghostty_app_t, ghostty_color_schem
 // Enable coalesced per-surface terminal-content actions. Disabled by default.
 GHOSTTY_API void ghostty_app_set_surface_content_events_enabled(ghostty_app_t, bool);
 
+// Allow or forbid GPU presentation for every surface, from any thread.
+// Allowed by default.
+GHOSTTY_API void ghostty_presentation_set_allowed(bool);
+
 GHOSTTY_API ghostty_surface_config_s ghostty_surface_config_new();
 
 GHOSTTY_API ghostty_surface_t ghostty_surface_new(ghostty_app_t,

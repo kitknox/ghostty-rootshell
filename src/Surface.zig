@@ -104,6 +104,12 @@ font_size_adjusted: bool,
 /// padding recompute can re-apply it. Set via setBottomInset.
 bottom_inset_px: u32 = 0,
 
+/// Runtime top inset in framebuffer pixels (e.g. the iOS status bar and the
+/// chrome above the terminal), applied as extra top padding so the grid sits
+/// below it while the scrollback rows just above the viewport are drawn into
+/// it. Persisted like bottom_inset_px. Set via setTopInset.
+top_inset_px: u32 = 0,
+
 /// The renderer for this surface.
 renderer: Renderer,
 
@@ -1601,6 +1607,7 @@ fn selectionScrollTick(self: *Surface) !void {
             .screen_height = self.size.screen.height,
             // rootshell(iOS): keep the bottom autoscroll edge reachable.
             .bottom_autoscroll_threshold = self.bottomAutoscrollThreshold(),
+            .top_autoscroll_threshold = self.topAutoscrollThreshold(),
         },
     });
 
@@ -3077,10 +3084,7 @@ pub fn scrollToRowSmooth(self: *Surface, row: usize, y_px: f64) !void {
 /// the bottom. Only the unbalanced padding path is adjusted, which is the only
 /// mode iOS (the sole caller) uses.
 pub fn setBottomInset(self: *Surface, px: f64) !void {
-    const inset: u32 = if (std.math.isFinite(px))
-        @intFromFloat(@min(@max(@round(px), 0), 10000))
-    else
-        0;
+    const inset = insetPixels(px);
     if (self.bottom_inset_px == inset) return;
     self.bottom_inset_px = inset;
 
@@ -3090,16 +3094,49 @@ pub fn setBottomInset(self: *Surface, px: f64) !void {
         self.renderer_state.bottom_inset_px = inset;
     }
 
+    try self.applyInsetPadding();
+}
+
+/// Reserve a top inset in framebuffer pixels at the top of the surface, e.g.
+/// the iOS status bar plus any chrome the terminal extends beneath. The inset
+/// is applied as extra top padding so the grid starts below it; the renderer
+/// fills the inset with the scrollback rows just above the viewport, so content
+/// scrolls under the chrome. Rows that don't exist (the top of scrollback, the
+/// alternate screen) leave it blank. Like setBottomInset, only the unbalanced
+/// padding path is adjusted.
+pub fn setTopInset(self: *Surface, px: f64) !void {
+    const inset = insetPixels(px);
+    if (self.top_inset_px == inset) return;
+    self.top_inset_px = inset;
+
+    {
+        self.renderer_state.mutex.lockUncancelable(global.io());
+        defer self.renderer_state.mutex.unlock(global.io());
+        self.renderer_state.top_inset_px = inset;
+    }
+
+    try self.applyInsetPadding();
+}
+
+/// Round a runtime inset to whole pixels, clamped to 0...10000; non-finite
+/// values clear it.
+fn insetPixels(px: f64) u32 {
+    if (!std.math.isFinite(px)) return 0;
+    return @intFromFloat(@min(@max(@round(px), 0), 10000));
+}
+
+/// Recompute the configured padding plus the runtime insets, resize the grid
+/// for it, and schedule a render so the new overscan counts take effect.
+fn applyInsetPadding(self: *Surface) !void {
     if (self.config.window_padding_balance == .false) {
         const content_scale = try self.rt_surface.getContentScale();
         const x_dpi = content_scale.x * font.face.default_dpi;
         const y_dpi = content_scale.y * font.face.default_dpi;
         self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
-        self.size.padding.bottom += inset;
+        self.size.padding.top += self.top_inset_px;
+        self.size.padding.bottom += self.bottom_inset_px;
     }
 
-    // Recompute the grid for the new padding and notify the IO thread, then
-    // schedule a render so the new overscan count takes effect.
     try self.resize(self.size.screen);
     try self.queueRender();
 }
@@ -4425,8 +4462,9 @@ pub fn contentScaleCallback(self: *Surface, content_scale: apprt.ContentScale) !
     // unbalanced padding since balanced padding is not dependent on DPI.
     if (self.config.window_padding_balance == .false) {
         self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
-        // Re-apply the runtime bottom inset (e.g. iOS safe-area) after the
-        // DPI-dependent padding recompute so a font/DPI change doesn't drop it.
+        // Re-apply the runtime insets (e.g. iOS safe areas) after the
+        // DPI-dependent padding recompute so a font/DPI change doesn't drop them.
+        self.size.padding.top += self.top_inset_px;
         self.size.padding.bottom += self.bottom_inset_px;
     }
 
@@ -5810,6 +5848,7 @@ pub fn cursorPosCallback(
                 .screen_height = self.size.screen.height,
                 // rootshell(iOS): keep the bottom autoscroll edge reachable.
                 .bottom_autoscroll_threshold = self.bottomAutoscrollThreshold(),
+                .top_autoscroll_threshold = self.topAutoscrollThreshold(),
             },
         });
 
@@ -5916,6 +5955,17 @@ fn bottomAutoscrollThreshold(self: *const Surface) f64 {
         .{ .x = 1, .y = 1 }).y;
     const bottom_slop: f32 = 2 * scale_y;
     return @floatCast(grid_bottom - bottom_slop);
+}
+
+/// rootshell(iOS): the upward autoscroll edge when a top inset puts the grid
+/// below the surface top: the grid top plus the same slop as the bottom edge.
+/// Null without an inset, keeping the standard surface-edge trigger.
+fn topAutoscrollThreshold(self: *const Surface) ?f64 {
+    if (self.top_inset_px == 0) return null;
+    const grid_top: f32 = @floatFromInt(self.size.padding.top);
+    const scale_y: f32 = (self.rt_surface.getContentScale() catch
+        .{ .x = 1, .y = 1 }).y;
+    return @floatCast(grid_top + 2 * scale_y);
 }
 
 /// rootshell(iOS touch selection): begin a drag from a selection handle.

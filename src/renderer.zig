@@ -33,6 +33,7 @@ pub const Coordinate = size.Coordinate;
 pub const CellSize = size.CellSize;
 pub const ScreenSize = size.ScreenSize;
 pub const GridSize = size.GridSize;
+pub const overscanAboveRows = size.overscanAboveRows;
 pub const Padding = size.Padding;
 pub const cursorStyle = cursor.style;
 pub const lib = @import("lib/main.zig");

@@ -1924,6 +1924,19 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     const need: u32 = (bottom_region + cell_h - 1) / cell_h + 2;
                     break :rows @intCast(@min(@max(need, 2), 255));
                 };
+                // Overscan rows above the viewport fill the top inset (the
+                // whole region above the grid) at all times, so scrollback
+                // shows beneath the chrome. A positive rubber band pulls the
+                // content down and exposes more of that region.
+                // setRubberBandOffset bounds the band by the screen height.
+                const above_rows: terminal.size.CellCountInt = if (state.top_inset_px == 0)
+                    0
+                else
+                    renderer.overscanAboveRows(
+                        self.size.padding.top,
+                        @intFromFloat(@ceil(@max(0, rubber_band_y_px))),
+                        self.size.cell.height,
+                    );
                 // Begin the update of our terminal state. Work that
                 // doesn't require terminal access (e.g. style
                 // denormalization) is deferred to the endUpdate call
@@ -1932,7 +1945,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 try self.terminal_state.beginUpdateExtraRows(
                     self.alloc,
                     state.terminal,
-                    extra_rows,
+                    .{ .above = above_rows, .below = extra_rows },
                 );
 
                 // ROOTSHELL-REDACT: refresh the non-dirty rows of any
@@ -2068,7 +2081,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // under a point at @2x/@3x. All three offset consumers (text, bg,
             // image) read this single uniform, so they stay aligned.
             const visual_y_px = critical.smooth_scroll_y_px - critical.rubber_band_y_px;
-            self.uniforms.smooth_scroll_offset = @round(@as(f32, @floatCast(visual_y_px)));
+            // The cell grid starts with the overscan rows above the viewport,
+            // so shift it up by them to keep the viewport at the padding top.
+            // Images are placed relative to the viewport and are drawn at the
+            // viewport's grid row to cancel the shift.
+            const vp_start = self.terminal_state.viewportStart();
+            const above_px: f32 = @floatFromInt(vp_start * self.size.cell.height);
+            self.uniforms.smooth_scroll_offset = @round(@as(f32, @floatCast(visual_y_px))) + above_px;
 
             // Outside the critical area we can update our links to contain
             // our regex results.
@@ -2512,6 +2531,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     });
                 }
 
+                const viewport_row: f32 = @floatFromInt(self.terminal_state.viewportStart());
+
                 // Then we draw any kitty images that need
                 // to be behind text AND cell backgrounds.
                 self.images.draw(
@@ -2519,6 +2540,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     self.shaders.pipelines.image,
                     &pass,
                     .kitty_below_bg,
+                    viewport_row,
                 );
 
                 // Then we draw any opaque cell backgrounds.
@@ -2535,6 +2557,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     self.shaders.pipelines.image,
                     &pass,
                     .kitty_below_text,
+                    viewport_row,
                 );
 
                 // Text.
@@ -2562,6 +2585,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     self.shaders.pipelines.image,
                     &pass,
                     .kitty_above_text,
+                    viewport_row,
                 );
 
                 // Debug overlay. We do this before any custom shader state
@@ -2571,6 +2595,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     self.shaders.pipelines.image,
                     &pass,
                     .overlay,
+                    viewport_row,
                 );
             }
 
@@ -3335,9 +3360,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         ) Allocator.Error!void {
             const state: *terminal.RenderState = &self.terminal_state;
 
-            // ROOTSHELL: smooth scrolling draws the overscan rows below the
-            // viewport too, so the cell grid covers all of them.
+            // ROOTSHELL: smooth scrolling and the top inset draw the overscan
+            // rows too. Grid row i holds row_data index i, so the viewport
+            // starts at grid row `vp_start`; the cursor and preedit, which are
+            // viewport-relative, are offset by it.
             const render_rows: terminal.size.CellCountInt = @intCast(state.renderRows());
+            const vp_start: terminal.size.CellCountInt = @intCast(state.viewportStart());
+            const row_range = state.rowDataRange();
+            assert(row_range.start <= vp_start);
+            assert(@as(usize, vp_start) + state.rows <= render_rows);
 
             const grid_size_diff =
                 self.cells.size.rows != render_rows or
@@ -3409,26 +3440,30 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // If our preedit row isn't dirty then we don't need the
                 // preedit range. This also avoids an issue later where we
                 // unconditionally add preedit cells when this is set.
-                if (!rebuild and !row_dirty[cursor_vp.y]) break :preedit null;
+                if (!rebuild and !row_dirty[vp_start + cursor_vp.y]) break :preedit null;
 
                 const range = preedit_v.range(
                     cursor_vp.x,
                     state.cols - 1,
                 );
                 break :preedit .{
-                    .y = @intCast(cursor_vp.y),
+                    .y = @intCast(vp_start + cursor_vp.y),
                     .x = .{ range.start, range.end },
                     .cp_offset = range.cp_offset,
                 };
             } else null;
 
+            // Entries before the range are overscan rows above that don't
+            // exist; they stay empty from the reset above, since a change in
+            // the captured overscan forces a full rebuild.
+            const row_start = @min(row_range.start, row_len);
             for (
-                0..,
-                row_raws[0..row_len],
-                row_cells[0..row_len],
-                row_dirty[0..row_len],
-                row_selection[0..row_len],
-                row_highlights[0..row_len],
+                row_start..,
+                row_raws[row_start..row_len],
+                row_cells[row_start..row_len],
+                row_dirty[row_start..row_len],
+                row_selection[row_start..row_len],
+                row_highlights[row_start..row_len],
             ) |y_usize, row, *cells, *dirty, selection, *highlights| {
                 const y: terminal.size.CellCountInt = @intCast(y_usize);
 
@@ -3476,7 +3511,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 const cursor_vp = state.cursor.viewport orelse break :cursor;
                 const cursor_style: terminal.Style = cursor_style: {
                     const cells = state.row_data.items(.cells);
-                    const cell = cells[cursor_vp.y].get(cursor_vp.x);
+                    const cell = cells[vp_start + cursor_vp.y].get(cursor_vp.x);
                     break :cursor_style if (cell.raw.hasStyling())
                         cell.style
                     else
@@ -3547,7 +3582,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                             .narrow, .spacer_head, .wide => cursor_vp.x,
                             .spacer_tail => cursor_vp.x -| 1,
                         },
-                        @intCast(cursor_vp.y),
+                        @intCast(vp_start + cursor_vp.y),
                     };
 
                     self.uniforms.bools.cursor_wide = switch (wide) {
@@ -3655,7 +3690,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 .background, .@"extend-always" => {},
 
                 // Apply heuristics for padding extension.
-                .extend => if (y == 0) {
+                .extend => if (y == state.rowDataRange().start) {
                     self.uniforms.padding_extend.up = !rowNeverExtendBg(
                         row,
                         cells_raw,
@@ -3684,7 +3719,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // visible on this viewport.
                 .cursor_x = cursor_x: {
                     const vp = state.cursor.viewport orelse break :cursor_x null;
-                    if (vp.y != y) break :cursor_x null;
+                    if (state.viewportStart() + vp.y != y) break :cursor_x null;
                     break :cursor_x vp.x;
                 },
             };
@@ -3950,9 +3985,12 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // an underline, in which case use a double underline to
                 // distinguish them.
                 const underline: terminal.Attribute.Underline = underline: {
-                    if (links.contains(.{
+                    // Links are viewport-relative and never cover the
+                    // overscan rows above.
+                    const vp_start = state.viewportStart();
+                    if (y >= vp_start and links.contains(.{
                         .x = @intCast(x),
-                        .y = @intCast(y),
+                        .y = @intCast(y - vp_start),
                     })) {
                         break :underline if (style.flags.underline == .single)
                             .double
@@ -4336,7 +4374,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             self.cells.setCursor(.{
                 .atlas = .grayscale,
                 .bools = .{ .is_cursor_glyph = true },
-                .grid_pos = .{ x, cursor_vp.y },
+                .grid_pos = .{
+                    x,
+                    @intCast(self.terminal_state.viewportStart() + cursor_vp.y),
+                },
                 .color = .{ cursor_color.r, cursor_color.g, cursor_color.b, alpha },
                 .glyph_pos = .{ render.glyph.atlas_x, render.glyph.atlas_y },
                 .glyph_size = .{ render.glyph.width, render.glyph.height },

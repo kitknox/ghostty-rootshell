@@ -100,6 +100,11 @@ pub const State = struct {
 
     /// Draw the given named set of placements.
     ///
+    /// Placements are viewport-relative. ROOTSHELL: `viewport_row` is the
+    /// cell grid row where the viewport starts; the grid begins with the
+    /// overscan rows above the viewport (the top inset) and is shifted up by
+    /// them, so placements move down by as many rows to stay in place.
+    ///
     /// Any placements that have non-uploaded images are ignored. Any
     /// graphics API errors during drawing are also ignored.
     pub fn draw(
@@ -108,6 +113,7 @@ pub const State = struct {
         pipeline: GraphicsAPI.Pipeline,
         pass: *GraphicsAPI.RenderPass,
         placement_type: DrawPlacements,
+        viewport_row: f32,
     ) void {
         const placements: []const Placement = switch (placement_type) {
             .kitty_below_bg => self.kitty_placements.items[0..self.kitty_bg_end],
@@ -141,7 +147,7 @@ pub const State = struct {
                 &.{.{
                     .grid_pos = .{
                         @as(f32, @floatFromInt(p.x)),
-                        @as(f32, @floatFromInt(p.y)),
+                        @as(f32, @floatFromInt(p.y)) + viewport_row,
                     },
 
                     .cell_offset = .{

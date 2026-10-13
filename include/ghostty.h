@@ -1388,6 +1388,7 @@ GHOSTTY_API bool ghostty_surface_vsync_running(ghostty_surface_t);
 GHOSTTY_API int64_t ghostty_surface_vsync_last_tick_age_ms(ghostty_surface_t);
 GHOSTTY_API void ghostty_surface_scroll_to_row_smooth(ghostty_surface_t, uintptr_t, double);
 GHOSTTY_API void ghostty_surface_set_bottom_inset(ghostty_surface_t, double);
+GHOSTTY_API void ghostty_surface_set_top_inset(ghostty_surface_t, double);
 GHOSTTY_API bool ghostty_surface_selection_handle_drag_begin(ghostty_surface_t, bool);
 GHOSTTY_API bool ghostty_surface_selection_viewport_visibility(ghostty_surface_t, bool*, bool*);
 GHOSTTY_API void ghostty_surface_set_content_scale(ghostty_surface_t, double, double);

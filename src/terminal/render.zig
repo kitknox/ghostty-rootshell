@@ -487,29 +487,31 @@ pub const RenderState = struct {
         self.endUpdate();
     }
 
-    /// ROOTSHELL: smooth scrolling. Update with `extra_rows` of overscan
-    /// below the viewport; equivalent to `beginUpdateExtraRows` followed
-    /// by `endUpdate`.
+    /// ROOTSHELL: smooth scrolling and the top inset. Update with
+    /// `extra.above` and `extra.below` rows of overscan; equivalent to
+    /// `beginUpdateExtraRows` followed by `endUpdate`.
     pub fn updateExtraRows(
         self: *RenderState,
         alloc: Allocator,
         t: *Terminal,
-        extra_rows: size.CellCountInt,
+        extra: Overscan,
     ) Allocator.Error!void {
-        try self.beginUpdateExtraRows(alloc, t, extra_rows);
+        try self.beginUpdateExtraRows(alloc, t, extra);
         self.endUpdate();
     }
 
-    /// ROOTSHELL: smooth scrolling. `beginUpdate` with `extra_rows` of
-    /// overscan below the viewport. Readers use `renderRows()` rows from
-    /// `row_data[0..]`, since nothing is ever requested above.
+    /// ROOTSHELL: smooth scrolling and the top inset. `beginUpdate` with
+    /// `extra.above` rows of overscan above the viewport (drawn into the
+    /// top inset) and `extra.below` rows below it. Readers draw
+    /// `rowDataRange()`; `row_data` index i is drawn at grid row i, so the
+    /// viewport starts at grid row `viewportStart()`.
     pub fn beginUpdateExtraRows(
         self: *RenderState,
         alloc: Allocator,
         t: *Terminal,
-        extra_rows: size.CellCountInt,
+        extra: Overscan,
     ) Allocator.Error!void {
-        self.overscan_request = .{ .below = extra_rows };
+        self.overscan_request = extra;
         try self.beginUpdate(alloc, t);
 
         // The overscan rows below are drawn, so a cursor there is visible;
@@ -517,7 +519,8 @@ pub const RenderState = struct {
         if (self.cursor.viewport != null or self.overscan.below == 0) return;
         const s: *Screen = t.screens.active;
         const cursor_pin = s.cursor.page_pin.*;
-        const pins = self.row_data.items(.pin)[self.rows..][0..self.overscan.below];
+        const below_start = self.viewportStart() + self.rows;
+        const pins = self.row_data.items(.pin)[below_start..][0..self.overscan.below];
         for (pins, self.rows..) |pin, y| {
             if (pin.node != cursor_pin.node or pin.y != cursor_pin.y) continue;
             self.cursor.viewport = .{
@@ -532,11 +535,11 @@ pub const RenderState = struct {
         }
     }
 
-    /// ROOTSHELL: the viewport rows plus the captured overscan below, all
-    /// starting at `row_data[0]` when only `beginUpdateExtraRows` is used.
+    /// ROOTSHELL: the number of grid rows to draw: everything up to the
+    /// end of `rowDataRange()`. Entries before `rowDataRange().start`
+    /// (overscan above that doesn't exist) are drawn empty.
     pub fn renderRows(self: *const RenderState) usize {
-        assert(self.overscan_request.above == 0);
-        return @as(usize, self.rows) + self.overscan.below;
+        return self.rowDataRange().end;
     }
 
     /// ROOTSHELL: rows from `viewportStart()` that link search covers: the
@@ -3118,7 +3121,7 @@ test "updateExtraRows: render rows and cursor in overscan below" {
     defer state.deinit(alloc);
 
     t.scrollViewport(.{ .delta = -1 });
-    try state.updateExtraRows(alloc, &t, 2);
+    try state.updateExtraRows(alloc, &t, .{ .below = 2 });
     try testing.expectEqual(1, state.overscan.below);
     try testing.expectEqual(@as(usize, state.rows) + 1, state.renderRows());
     try testing.expectEqual(state.rows, state.cursor.viewport.?.y);
@@ -3126,10 +3129,60 @@ test "updateExtraRows: render rows and cursor in overscan below" {
 
     // Back at the bottom with no extra rows it is the stock render state.
     t.scrollViewport(.bottom);
-    try state.updateExtraRows(alloc, &t, 0);
+    try state.updateExtraRows(alloc, &t, .{});
     try testing.expectEqual(0, state.overscan.below);
     try testing.expectEqual(@as(usize, state.rows), state.renderRows());
     try testing.expectEqual(state.rows - 1, state.cursor.viewport.?.y);
+}
+
+test "updateExtraRows: overscan above for the top inset" {
+    // ROOTSHELL: the top inset draws the scrollback rows just above the
+    // viewport. row_data index i is drawn at grid row i, so the viewport
+    // starts at viewportStart() whether or not those rows exist.
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try Terminal.init(io, alloc, .{
+        .cols = 10,
+        .rows = 10,
+        .max_scrollback_bytes = 1_000_000,
+    });
+    defer t.deinit(alloc);
+
+    try testWriteNumberedLines(&t, 50);
+
+    var state: RenderState = .empty;
+    defer state.deinit(alloc);
+
+    // At the live bottom the rows above come from scrollback; the cursor
+    // stays viewport-relative.
+    try state.updateExtraRows(alloc, &t, .{ .above = 3 });
+    try testing.expectEqual(3, state.overscan.above);
+    try testing.expectEqual(3, state.viewportStart());
+    try testing.expectEqual(0, state.rowDataRange().start);
+    try testing.expectEqual(@as(usize, 3) + state.rows, state.renderRows());
+    try testing.expectEqual(state.rows - 1, state.cursor.viewport.?.y);
+    const top = testRowNumber(&state, state.viewportStart()).?;
+    try testing.expectEqual(top - 1, testRowNumber(&state, 2).?);
+    try testing.expectEqual(top - 3, testRowNumber(&state, 0).?);
+
+    // Scrolled up by one with overscan on both sides: the cursor row is
+    // the first overscan row below and is reported at viewport y = rows.
+    t.scrollViewport(.{ .delta = -1 });
+    try state.updateExtraRows(alloc, &t, .{ .above = 3, .below = 2 });
+    try testing.expectEqual(1, state.overscan.below);
+    try testing.expectEqual(@as(usize, 3) + state.rows + 1, state.renderRows());
+    try testing.expectEqual(state.rows, state.cursor.viewport.?.y);
+
+    // At the top of scrollback nothing exists above: the viewport keeps
+    // its index and the unused entries fall outside rowDataRange().
+    t.scrollViewport(.top);
+    try state.updateExtraRows(alloc, &t, .{ .above = 3 });
+    try testing.expectEqual(0, state.overscan.above);
+    try testing.expectEqual(3, state.rowDataRange().start);
+    try testing.expectEqual(@as(usize, 3) + state.rows, state.renderRows());
+    try testing.expectEqual(0, testRowNumber(&state, state.viewportStart()).?);
 }
 
 test "overscan selection on overscan rows" {

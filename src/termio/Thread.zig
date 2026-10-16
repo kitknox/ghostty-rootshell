@@ -312,7 +312,7 @@ fn drainMailbox(
 
         log.debug("mailbox message={s}", .{@tagName(message)});
         switch (message) {
-            .color_scheme_report => |v| try io.colorSchemeReport(data, v.force),
+            .color_scheme_report => |v| try io.colorSchemeReport(data, v.force, v.scheme),
             .visibility_report => |v| try io.visibilityReport(
                 data,
                 v.visible,

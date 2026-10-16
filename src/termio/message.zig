@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const configpkg = @import("../config.zig");
 const renderer = @import("../renderer.zig");
 const terminal = @import("../terminal/main.zig");
 const termio = @import("../termio.zig");
@@ -24,6 +25,10 @@ pub const Message = union(enum) {
     color_scheme_report: struct {
         /// Force write the current color scheme
         force: bool,
+
+        /// Adopt this scheme before reporting.
+        /// ROOTSHELL (id=surface-termio-color-scheme)
+        scheme: ?configpkg.ConditionalState.Theme = null,
     },
 
     /// Request a visibility report is sent to the PTY.

@@ -1050,9 +1050,21 @@ pub fn kittyClipboardGrant(
     try self.terminal_stream.handler.kittyClipboardGrant(pw, dir);
 }
 
-pub fn colorSchemeReport(self: *Termio, td: *ThreadData, force: bool) !void {
+pub fn colorSchemeReport(
+    self: *Termio,
+    td: *ThreadData,
+    force: bool,
+    scheme: ?configpkg.ConditionalState.Theme,
+) !void {
     self.renderer_state.mutex.lockUncancelable(global.io());
     defer self.renderer_state.mutex.unlock(global.io());
+
+    // Both reply paths (this one and the inline ?996n) read the new scheme.
+    // ROOTSHELL (id=surface-termio-color-scheme)
+    if (scheme) |theme| {
+        self.config.conditional_state.theme = theme;
+        self.terminal_stream.handler.color_scheme_is_dark = theme == .dark;
+    }
 
     try self.colorSchemeReportLocked(td, force);
 }

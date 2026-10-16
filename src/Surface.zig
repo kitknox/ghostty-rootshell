@@ -765,7 +765,7 @@ pub fn initWithOptions(
         try termio.Termio.init(&self.io, alloc, .{
             .size = size,
             .full_config = config,
-            .config = try termio.Termio.DerivedConfig.init(alloc, config),
+            .config = try termioDerivedConfig(alloc, config, app.config_conditional_state),
             .backend = backend,
             .mailbox = io_mailbox,
             .renderer_state = &self.renderer_state,
@@ -2214,7 +2214,7 @@ pub fn updateConfig(
     errdefer renderer_message.deinit();
     var termio_config_ptr = try self.alloc.create(termio.Termio.DerivedConfig);
     errdefer self.alloc.destroy(termio_config_ptr);
-    termio_config_ptr.* = try termio.Termio.DerivedConfig.init(self.alloc, config);
+    termio_config_ptr.* = try termioDerivedConfig(self.alloc, config, self.config_conditional_state);
     errdefer termio_config_ptr.deinit();
 
     _ = self.renderer_thread.mailbox.push(global.io(), renderer_message, .{ .forever = {} });
@@ -5853,8 +5853,27 @@ pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) !void {
     self.config_conditional_state.theme = new_scheme;
     self.notifyConfigConditionalState();
 
-    // If mode 2031 is on, then we report the change live.
-    self.queueIo(.{ .color_scheme_report = .{ .force = false } }, .unlocked);
+    // If mode 2031 is on, then we report the change live. The scheme rides
+    // along so termio answers with it before the next config update.
+    // ROOTSHELL (id=surface-termio-color-scheme)
+    self.queueIo(.{ .color_scheme_report = .{
+        .force = false,
+        .scheme = new_scheme,
+    } }, .unlocked);
+}
+
+/// Termio config carrying the surface's color scheme. A config without a
+/// light/dark conditional theme keeps the default `.light` conditional state,
+/// so ?996n and mode 2031 would never report dark.
+/// ROOTSHELL (id=surface-termio-color-scheme)
+fn termioDerivedConfig(
+    alloc: Allocator,
+    config: *const configpkg.Config,
+    state: configpkg.ConditionalState,
+) !termio.Termio.DerivedConfig {
+    var derived = try termio.Termio.DerivedConfig.init(alloc, config);
+    derived.conditional_state = state;
+    return derived;
 }
 
 fn posToViewportWithSmoothOffset(
@@ -7860,6 +7879,19 @@ test "queueIo frees allocated writes in readonly mode" {
         .alloc = testing.allocator,
         .data = data,
     } }, .unlocked);
+}
+
+test "termioDerivedConfig carries the surface color scheme" {
+    const testing = std.testing;
+
+    // A config with no conditional theme keeps the default `.light` state.
+    var cfg = try configpkg.Config.default(testing.allocator);
+    defer cfg.deinit();
+    try testing.expectEqual(.light, cfg._conditional_state.theme);
+
+    var derived = try termioDerivedConfig(testing.allocator, &cfg, .{ .theme = .dark });
+    defer derived.deinit();
+    try testing.expectEqual(.dark, derived.conditional_state.theme);
 }
 
 test "promptClickRelativeRow" {

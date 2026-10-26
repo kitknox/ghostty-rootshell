@@ -165,8 +165,9 @@ pub const Set = struct {
         const dirties = row_data.items(.dirty);
         const cells = row_data.items(.cells);
 
-        const nrows = state.rowDataRange().end;
-        var y: usize = 0;
+        const range = state.rowDataRange();
+        const nrows = range.end;
+        var y: usize = range.start;
         while (y < nrows) {
             // Group the soft-wrapped logical line starting at y. `wrap`
             // means "continues onto the next row".
@@ -409,8 +410,9 @@ pub fn extendWrapDirty(
     const dirties = row_data.items(.dirty);
     const cells = row_data.items(.cells);
 
-    const nrows = state.rowDataRange().end;
-    var y: usize = 0;
+    const range = state.rowDataRange();
+    const nrows = range.end;
+    var y: usize = range.start;
     while (y < nrows) {
         var end = y;
         while (end + 1 < nrows and raws[end].wrap) end += 1;

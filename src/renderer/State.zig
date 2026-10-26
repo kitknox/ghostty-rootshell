@@ -58,6 +58,11 @@ rubber_band_y_px: f64 = 0,
 /// strip (desktop, macOS), which keeps the overscan at its default of two rows.
 bottom_inset_px: u32 = 0,
 
+/// Runtime top inset in framebuffer pixels (e.g. the iOS status bar). The
+/// renderer always captures enough overscan rows above the viewport to fill
+/// it, so scrollback shows beneath the chrome. Zero disables the overscan.
+top_inset_px: u32 = 0,
+
 /// The number of threads currently waiting to acquire `mutex` via
 /// `lockDemand`. This is not protected by the mutex; it is read by
 /// hot lock/unlock loops (the IO parse thread) in `yieldToDemand` to

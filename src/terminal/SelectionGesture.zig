@@ -338,6 +338,13 @@ pub const Drag = struct {
         /// value and derives it from the true grid bottom rather than
         /// `screen_height`, which overshoots due to padding/row rounding.
         bottom_autoscroll_threshold: ?f64 = null,
+
+        /// rootshell(iOS): optional override for the y position (in surface
+        /// pixels) at or below which an upward autoscroll triggers. When null,
+        /// the standard `autoscroll_buffer` edge is used. Set when a top inset
+        /// puts the grid top below the surface top, which would otherwise
+        /// leave the upward trigger inside the inset.
+        top_autoscroll_threshold: ?f64 = null,
     };
 };
 
@@ -382,7 +389,9 @@ pub fn drag(
     const max_y: f64 = @floatFromInt(d.geometry.screen_height);
     const bottom_threshold = d.geometry.bottom_autoscroll_threshold orelse
         (max_y - autoscroll_buffer);
-    self.left_drag_autoscroll = if (d.ypos <= autoscroll_buffer)
+    const top_threshold = d.geometry.top_autoscroll_threshold orelse
+        autoscroll_buffer;
+    self.left_drag_autoscroll = if (d.ypos <= top_threshold)
         .up
     else if (d.ypos > bottom_threshold)
         .down

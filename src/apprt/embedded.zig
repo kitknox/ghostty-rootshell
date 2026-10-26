@@ -2414,6 +2414,19 @@ pub const CAPI = struct {
         };
     }
 
+    /// Reserve a top inset in framebuffer pixels (e.g. the iOS status bar and
+    /// the chrome the surface extends beneath). The grid starts below it and
+    /// the strip shows the scrollback rows just above the viewport. Pass 0 to
+    /// clear.
+    export fn ghostty_surface_set_top_inset(
+        surface: *Surface,
+        px: f64,
+    ) void {
+        surface.core_surface.setTopInset(px) catch |err| {
+            log.err("error setting top inset err={}", .{err});
+        };
+    }
+
     /// Begin a touch selection-handle drag anchored at the fixed (opposite)
     /// endpoint of the current selection. Subsequent ghostty_surface_mouse_pos
     /// calls extend the selection from that endpoint; a left-button release ends

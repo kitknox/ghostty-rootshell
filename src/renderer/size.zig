@@ -363,6 +363,40 @@ test "Size.balancePadding true shifts excess top to bottom" {
     try testing.expectEqual(@as(u32, 20), size.padding.bottom);
 }
 
+/// ROOTSHELL: the number of overscan rows to capture above the viewport so
+/// they cover the whole region above the grid: the top padding (which holds
+/// the top inset) plus however far a rubber band pulls the content down. One
+/// extra row covers the partial row at the top edge. Capped like the bottom
+/// overscan; rows past the drawable just clip. Zero cell height draws nothing.
+pub fn overscanAboveRows(
+    padding_top_px: u32,
+    rubber_band_pull_px: u32,
+    cell_height_px: u32,
+) terminal_size.CellCountInt {
+    const overscan_rows_max = 255;
+    if (cell_height_px == 0) return 0;
+    const region_px = @as(u64, padding_top_px) + rubber_band_pull_px;
+    const rows = (region_px + cell_height_px - 1) / cell_height_px;
+    return @intCast(@min(rows + 1, overscan_rows_max));
+}
+
+test "overscanAboveRows covers the region above the grid" {
+    const testing = std.testing;
+
+    // An exact multiple still gets the partial-row slack.
+    try testing.expectEqual(4, overscanAboveRows(60, 0, 20));
+    // A partial row rounds up before the slack.
+    try testing.expectEqual(5, overscanAboveRows(61, 0, 20));
+    // A rubber band pull exposes more of the region.
+    try testing.expectEqual(6, overscanAboveRows(60, 40, 20));
+    // No padding still captures the edge row.
+    try testing.expectEqual(1, overscanAboveRows(0, 0, 20));
+    // A degenerate cell height captures nothing.
+    try testing.expectEqual(0, overscanAboveRows(60, 0, 0));
+    // Huge regions are capped.
+    try testing.expectEqual(255, overscanAboveRows(10_000, std.math.maxInt(u32), 1));
+}
+
 test "Padding balanced on zero" {
     // On some systems, our screen can be zero-sized for a bit, and we
     // don't want to end up with negative padding.

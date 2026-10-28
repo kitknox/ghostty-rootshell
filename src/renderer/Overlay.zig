@@ -161,10 +161,11 @@ fn highlightHyperlinks(
     const fill_color = Color.hyperlink.rectFill();
 
     const row_slice = state.row_data.slice();
-    // Only captured rows hold data (smooth scrolling overscans below).
+    // Only captured rows hold data (smooth scrolling overscans below). The
+    // overlay is viewport-aligned, so rows above the viewport are skipped.
     const range = state.rowDataRange();
-    const row_raw = row_slice.items(.raw)[range.start..range.end];
-    const row_cells = row_slice.items(.cells)[range.start..range.end];
+    const row_raw = row_slice.items(.raw)[state.viewportStart()..range.end];
+    const row_cells = row_slice.items(.cells)[state.viewportStart()..range.end];
     for (row_raw, row_cells, 0..) |row, cells, y| {
         if (!row.hyperlink) continue;
 
@@ -207,10 +208,11 @@ fn highlightSemanticPrompts(
     state: *const terminal.RenderState,
 ) void {
     const row_slice = state.row_data.slice();
-    // Only captured rows hold data (smooth scrolling overscans below).
+    // Only captured rows hold data (smooth scrolling overscans below). The
+    // overlay is viewport-aligned, so rows above the viewport are skipped.
     const range = state.rowDataRange();
-    const row_raw = row_slice.items(.raw)[range.start..range.end];
-    const row_cells = row_slice.items(.cells)[range.start..range.end];
+    const row_raw = row_slice.items(.raw)[state.viewportStart()..range.end];
+    const row_cells = row_slice.items(.cells)[state.viewportStart()..range.end];
 
     // Highlight the row-level semantic prompt bars. The prompts are easy
     // because they're part of the row metadata.

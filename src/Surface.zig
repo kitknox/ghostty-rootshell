@@ -104,6 +104,11 @@ font_size_adjusted: bool,
 /// padding recompute can re-apply it. Set via setBottomInset.
 bottom_inset_px: u32 = 0,
 
+/// ROOTSHELL: runtime top inset in framebuffer pixels (e.g. a rounded display
+/// corner), applied as extra top padding like bottom_inset_px. Set via
+/// setTopInset.
+top_inset_px: u32 = 0,
+
 /// The renderer for this surface.
 renderer: Renderer,
 
@@ -3095,11 +3100,43 @@ pub fn setBottomInset(self: *Surface, px: f64) !void {
         const x_dpi = content_scale.x * font.face.default_dpi;
         const y_dpi = content_scale.y * font.face.default_dpi;
         self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
+        self.size.padding.top += self.top_inset_px;
         self.size.padding.bottom += inset;
     }
 
     // Recompute the grid for the new padding and notify the IO thread, then
     // schedule a render so the new overscan count takes effect.
+    try self.resize(self.size.screen);
+    try self.queueRender();
+}
+
+/// ROOTSHELL: reserve a top inset in framebuffer pixels, e.g. a display's
+/// rounded corner. Applied as extra top padding so the grid starts below it;
+/// the renderer fills the inset with the scrollback rows above the viewport,
+/// at rest and while scrolling. Unbalanced padding only, like setBottomInset.
+pub fn setTopInset(self: *Surface, px: f64) !void {
+    const inset: u32 = if (std.math.isFinite(px))
+        @intFromFloat(@min(@max(@round(px), 0), 10000))
+    else
+        0;
+    if (self.top_inset_px == inset) return;
+    self.top_inset_px = inset;
+
+    {
+        self.renderer_state.mutex.lockUncancelable(global.io());
+        defer self.renderer_state.mutex.unlock(global.io());
+        self.renderer_state.top_inset_px = inset;
+    }
+
+    if (self.config.window_padding_balance == .false) {
+        const content_scale = try self.rt_surface.getContentScale();
+        const x_dpi = content_scale.x * font.face.default_dpi;
+        const y_dpi = content_scale.y * font.face.default_dpi;
+        self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
+        self.size.padding.top += inset;
+        self.size.padding.bottom += self.bottom_inset_px;
+    }
+
     try self.resize(self.size.screen);
     try self.queueRender();
 }
@@ -4427,6 +4464,7 @@ pub fn contentScaleCallback(self: *Surface, content_scale: apprt.ContentScale) !
         self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
         // Re-apply the runtime bottom inset (e.g. iOS safe-area) after the
         // DPI-dependent padding recompute so a font/DPI change doesn't drop it.
+        self.size.padding.top += self.top_inset_px;
         self.size.padding.bottom += self.bottom_inset_px;
     }
 

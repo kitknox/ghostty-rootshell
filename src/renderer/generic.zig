@@ -189,6 +189,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         /// Current cursor blink alpha for animated blink modes.
         cursor_blink_alpha: f64 = 1.0,
 
+        /// ROOTSHELL: grid rows above the viewport (top inset) in the cells
+        /// drawFrame reads. Set with them under draw_mutex.
+        grid_row_shift: u32 = 0,
+
         /// True if the window is visible.
         visible: bool,
 
@@ -1924,6 +1928,16 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     const need: u32 = (bottom_region + cell_h - 1) / cell_h + 2;
                     break :rows @intCast(@min(@max(need, 2), 255));
                 };
+                // ROOTSHELL: with a top inset (e.g. a display's rounded
+                // corner) the grid starts below it, and the scrollback above
+                // the viewport fills the whole region above the first row,
+                // at rest and while scrolling.
+                const above_rows: terminal.size.CellCountInt = rows: {
+                    const cell_h = self.size.cell.height;
+                    if (state.top_inset_px == 0 or cell_h == 0) break :rows 0;
+                    const need: u32 = (self.size.padding.top + cell_h - 1) / cell_h;
+                    break :rows @intCast(@min(need, 255));
+                };
                 // Begin the update of our terminal state. Work that
                 // doesn't require terminal access (e.g. style
                 // denormalization) is deferred to the endUpdate call
@@ -1932,6 +1946,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 try self.terminal_state.beginUpdateExtraRows(
                     self.alloc,
                     state.terminal,
+                    above_rows,
                     extra_rows,
                 );
 
@@ -1995,7 +2010,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // If we have any virtual references, we must also rebuild our
                 // kitty state on every frame because any cell change can move
                 // an image.
-                if (self.images.kittyRequiresUpdate(state.terminal)) {
+                if (self.images.kittyRequiresUpdate(state.terminal, above_rows)) {
                     // We need to grab the draw mutex since this updates
                     // our image state that drawFrame uses.
                     self.draw_mutex.lockUncancelable(global.io());
@@ -2007,6 +2022,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                             .width = self.grid_metrics.cell_width,
                             .height = self.grid_metrics.cell_height,
                         },
+                        above_rows,
                     );
                 }
 
@@ -2058,17 +2074,6 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // purpose: links must match the masked text so a redacted
             // email/URL is never highlighted as a link.
             if (self.redact) |*r| r.apply(&self.terminal_state, arena_alloc);
-
-            // Snap the smooth-scroll offset to a whole device pixel. The cell
-            // text shader samples the glyph atlas with nearest-neighbor
-            // filtering, so a fractional offset makes glyph-edge rows shimmer
-            // ("sparkle") as the value slides between texels frame to frame.
-            // Rounding keeps every frame pixel-aligned the way native platform
-            // scrolling renders, while staying smooth: one device pixel is well
-            // under a point at @2x/@3x. All three offset consumers (text, bg,
-            // image) read this single uniform, so they stay aligned.
-            const visual_y_px = critical.smooth_scroll_y_px - critical.rubber_band_y_px;
-            self.uniforms.smooth_scroll_offset = @round(@as(f32, @floatCast(visual_y_px)));
 
             // Outside the critical area we can update our links to contain
             // our regex results.
@@ -2153,6 +2158,28 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
                 // Store blink alpha for use in addCursor
                 self.cursor_blink_alpha = cursor_blink_alpha;
+
+                // ROOTSHELL: placements are viewport-relative; keep them on
+                // the viewport rows below any top inset overscan.
+                self.grid_row_shift = @intCast(self.terminal_state.viewportStart());
+                self.images.grid_row_shift = self.grid_row_shift;
+
+                // Snap the smooth-scroll offset to a whole device pixel. The cell
+                // text shader samples the glyph atlas with nearest-neighbor
+                // filtering, so a fractional offset makes glyph-edge rows shimmer
+                // ("sparkle") as the value slides between texels frame to frame.
+                // Rounding keeps every frame pixel-aligned the way native platform
+                // scrolling renders, while staying smooth: one device pixel is well
+                // under a point at @2x/@3x. All three offset consumers (text, bg,
+                // image) read this single uniform, so they stay aligned.
+                //
+                // ROOTSHELL: rows above the viewport (top inset) occupy the top of
+                // the cell grid, so the offset also lifts them above the padding.
+                // Set with the cells so a draw never pairs it with the old grid.
+                const above_px: f64 = @floatFromInt(self.grid_row_shift *
+                    self.grid_metrics.cell_height);
+                const visual_y_px = critical.smooth_scroll_y_px - critical.rubber_band_y_px + above_px;
+                self.uniforms.smooth_scroll_offset = @round(@as(f32, @floatCast(visual_y_px)));
 
                 // Build our GPU cells
                 var cursor_style = renderer.cursorStyle(&self.terminal_state, .{
@@ -3165,9 +3192,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     cursor.grid_pos[0] * cell.width + padding.left,
                 );
                 // Top edge, relative to the top of the
-                // screen, of the cell the cursor is in.
+                // screen, of the cell the cursor is in. Grid rows above the
+                // viewport (top inset) don't count.
                 var pixel_y: f32 = @floatFromInt(
-                    cursor.grid_pos[1] * cell.height + padding.top,
+                    (cursor.grid_pos[1] -| self.grid_row_shift) * cell.height + padding.top,
                 );
 
                 // If +Y is up in our shaders, we need to flip the coordinate
@@ -3397,6 +3425,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 self.cells.size.rows,
             );
 
+            // ROOTSHELL: grid rows are row_data indices. Rows above the
+            // viewport (top inset) come first; uncaptured ones stay blank.
+            const vp_start: terminal.size.CellCountInt = @intCast(state.viewportStart());
+            const row_start: usize = @min(state.rowDataRange().start, row_len);
+
             // Determine our x/y range for preedit. We don't want to render anything
             // here because we will render the preedit separately.
             const preedit_range: ?PreeditRange = if (preedit) |preedit_v| preedit: {
@@ -3409,26 +3442,26 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // If our preedit row isn't dirty then we don't need the
                 // preedit range. This also avoids an issue later where we
                 // unconditionally add preedit cells when this is set.
-                if (!rebuild and !row_dirty[cursor_vp.y]) break :preedit null;
+                if (!rebuild and !row_dirty[vp_start + cursor_vp.y]) break :preedit null;
 
                 const range = preedit_v.range(
                     cursor_vp.x,
                     state.cols - 1,
                 );
                 break :preedit .{
-                    .y = @intCast(cursor_vp.y),
+                    .y = vp_start + @as(terminal.size.CellCountInt, @intCast(cursor_vp.y)),
                     .x = .{ range.start, range.end },
                     .cp_offset = range.cp_offset,
                 };
             } else null;
 
             for (
-                0..,
-                row_raws[0..row_len],
-                row_cells[0..row_len],
-                row_dirty[0..row_len],
-                row_selection[0..row_len],
-                row_highlights[0..row_len],
+                row_start..,
+                row_raws[row_start..row_len],
+                row_cells[row_start..row_len],
+                row_dirty[row_start..row_len],
+                row_selection[row_start..row_len],
+                row_highlights[row_start..row_len],
             ) |y_usize, row, *cells, *dirty, selection, *highlights| {
                 const y: terminal.size.CellCountInt = @intCast(y_usize);
 
@@ -3476,7 +3509,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 const cursor_vp = state.cursor.viewport orelse break :cursor;
                 const cursor_style: terminal.Style = cursor_style: {
                     const cells = state.row_data.items(.cells);
-                    const cell = cells[cursor_vp.y].get(cursor_vp.x);
+                    const cell = cells[vp_start + cursor_vp.y].get(cursor_vp.x);
                     break :cursor_style if (cell.raw.hasStyling())
                         cell.style
                     else
@@ -3547,7 +3580,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                             .narrow, .spacer_head, .wide => cursor_vp.x,
                             .spacer_tail => cursor_vp.x -| 1,
                         },
-                        @intCast(cursor_vp.y),
+                        @intCast(vp_start + cursor_vp.y),
                     };
 
                     self.uniforms.bools.cursor_wide = switch (wide) {
@@ -3684,7 +3717,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // visible on this viewport.
                 .cursor_x = cursor_x: {
                     const vp = state.cursor.viewport orelse break :cursor_x null;
-                    if (vp.y != y) break :cursor_x null;
+                    if (state.viewportStart() + vp.y != y) break :cursor_x null;
                     break :cursor_x vp.x;
                 },
             };
@@ -3950,9 +3983,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // an underline, in which case use a double underline to
                 // distinguish them.
                 const underline: terminal.Attribute.Underline = underline: {
-                    if (links.contains(.{
+                    // Links use viewport rows; rows above it have none.
+                    if (y >= state.viewportStart() and links.contains(.{
                         .x = @intCast(x),
-                        .y = @intCast(y),
+                        .y = @intCast(y - state.viewportStart()),
                     })) {
                         break :underline if (style.flags.underline == .single)
                             .double
@@ -4336,7 +4370,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             self.cells.setCursor(.{
                 .atlas = .grayscale,
                 .bools = .{ .is_cursor_glyph = true },
-                .grid_pos = .{ x, cursor_vp.y },
+                .grid_pos = .{ x, @intCast(self.terminal_state.viewportStart() + cursor_vp.y) },
                 .color = .{ cursor_color.r, cursor_color.g, cursor_color.b, alpha },
                 .glyph_pos = .{ render.glyph.atlas_x, render.glyph.atlas_y },
                 .glyph_size = .{ render.glyph.width, render.glyph.height },

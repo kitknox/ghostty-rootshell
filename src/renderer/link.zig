@@ -200,13 +200,15 @@ fn extendMatchAcrossRows(
     ext_coords: *terminal.RenderState.StringMap,
 ) !bool {
     // Must have rows below the current match end.
-    // Rows include the captured overscan below (smooth scrolling).
-    const rows = render_state.rowDataRange().end;
+    // Rows include the captured overscan below (smooth scrolling). Match
+    // coordinates are viewport rows, so index from the viewport start.
+    const vp_start = render_state.viewportStart();
+    const rows = render_state.rowDataRange().end - vp_start;
     if (end_coord.y + 1 >= rows) return false;
 
     const row_slice = render_state.row_data.slice();
-    const row_raws = row_slice.items(.raw);
-    const row_cells_all = row_slice.items(.cells);
+    const row_raws = row_slice.items(.raw)[vp_start..];
+    const row_cells_all = row_slice.items(.cells)[vp_start..];
 
     // Don't extend if the row is part of a soft-wrap chain; the standard
     // string concatenation in RenderState.string() handles that case.

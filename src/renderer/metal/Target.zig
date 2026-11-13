@@ -114,3 +114,11 @@ pub fn deinit(self: *Self) void {
     self.surface.deinit();
     self.texture.release();
 }
+
+/// ROOTSHELL: give up a target whose surface something else still shows or
+/// holds. `deinit` discards the surface's pixels at once; this only drops
+/// our references, so the surface lives on until its last user lets go.
+pub fn deinitStillInUse(self: *Self) void {
+    self.surface.release();
+    self.texture.release();
+}

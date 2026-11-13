@@ -297,6 +297,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         /// (0 = none). Written on the app thread, read on the render thread.
         scroll_input_ns: std.atomic.Value(i64) = .init(0),
 
+        /// ROOTSHELL: awake-clock nanoseconds since which each swap chain
+        /// surface has been seen in use without a break (0 = free), and
+        /// whether the last draw ran out the surface-guard wait. Render
+        /// thread only, under draw_mutex.
+        surface_busy_since_ns: [GraphicsAPI.swap_chain_count]i64 = @splat(0),
+        surface_guard_waited_out: bool = false,
+
         /// Health of the most recently completed frame.
         health: std.atomic.Value(Health) = .{ .raw = .healthy },
 
@@ -1411,6 +1418,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             display_link.setFrameRateRange(range.min, range.max, range.preferred);
         }
 
+        /// ROOTSHELL: a surface in use this long, while another has been
+        /// freed, is held by something other than the display.
+        const surface_held_ms: i64 = 100;
+
         /// ROOTSHELL: scroll mode lasts this long after the latest scroll input.
         const scroll_mode_ms: i64 = 150;
 
@@ -2386,9 +2397,60 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             // still be showing this surface when draws outpace the display.
             // Drawing into it then tears. Bounded so a held surface can't wedge.
             if (comptime @hasField(Target, "surface")) {
-                var waited_us: u32 = 0;
-                while (frame.target.surface.isInUse() and waited_us < 50_000) : (waited_us += 500) {
-                    std.Io.sleep(global.io(), .fromMicroseconds(500), .awake) catch break;
+                // ROOTSHELL: note how long each surface has been in use. The
+                // display lets go of a surface once newer frames are shown, so
+                // one that stays busy while another has been freed is held by
+                // something else. macOS does this: it keeps the source of the
+                // latest view snapshot in use until the next snapshot is
+                // taken, long after the snapshot itself is gone.
+                const now_ns: i64 = now: {
+                    const now: std.Io.Timestamp = .now(global.io(), .awake);
+                    break :now @intCast(now.nanoseconds);
+                };
+                const target_index: usize = swap_chain.frame_index;
+                var another_is_free = false;
+                for (&swap_chain.frames, 0..) |*other, i| {
+                    if (other.target.surface.isInUse()) {
+                        if (self.surface_busy_since_ns[i] == 0) self.surface_busy_since_ns[i] = now_ns;
+                    } else {
+                        self.surface_busy_since_ns[i] = 0;
+                        if (i != target_index) another_is_free = true;
+                    }
+                }
+
+                // Held that way it never comes back, so replace it rather than
+                // wait for it on every lap of the swap chain.
+                const busy_since = self.surface_busy_since_ns[target_index];
+                var retire = busy_since != 0 and
+                    now_ns - busy_since > surface_held_ms * std.time.ns_per_ms and
+                    another_is_free;
+
+                if (!retire) {
+                    var waited_us: u32 = 0;
+                    while (frame.target.surface.isInUse() and waited_us < 50_000) : (waited_us += 500) {
+                        std.Io.sleep(global.io(), .fromMicroseconds(500), .awake) catch break;
+                    }
+
+                    // Freed during the wait: its next time in use is a new spell.
+                    if (!frame.target.surface.isInUse()) self.surface_busy_since_ns[target_index] = 0;
+
+                    // Backstop for a surface held too recently to tell above.
+                    // Not when the draw before also ran out the wait: then
+                    // nothing is being released (display asleep) and a new
+                    // surface would be held as well.
+                    const waited_out = waited_us >= 50_000 and frame.target.surface.isInUse();
+                    retire = waited_out and !self.surface_guard_waited_out;
+                    self.surface_guard_waited_out = waited_out;
+                } else {
+                    self.surface_guard_waited_out = false;
+                }
+
+                if (retire) {
+                    const fresh = try self.api.initTarget(frame.target.width, frame.target.height);
+                    // Whatever holds the old surface may still read its pixels.
+                    frame.target.deinitStillInUse();
+                    frame.target = fresh;
+                    self.surface_busy_since_ns[target_index] = 0;
                 }
             }
 

@@ -836,6 +836,8 @@ pub const Handler = struct {
                 log.warn("error reporting Kitty colors err={}", .{err});
             },
             .iterm2_image => self.terminal.iterm2Image(self.terminal.gpa(), value),
+            // ROOTSHELL (id=restore-pending-wrap): see stream.zig.
+            .restore_pending_wrap => self.terminal.screens.active.cursor.pending_wrap = value,
             .kitty_clipboard => self.kittyClipboard(value) catch |err| {
                 // Clipboard operations are external effects, not terminal
                 // state; a failed transaction was already answered.

@@ -103,6 +103,14 @@ tmux_reset_pending: std.atomic.Value(bool) = .init(false),
 /// ROOTSHELL-TMUX (id=termio-tmux-reset-priority)
 tmux_reset_preferred_window: std.atomic.Value(usize) = .init(std.math.maxInt(usize)),
 
+/// ROOTSHELL (id=termio-output-parsed-bytes): how many bytes of backend output
+/// processOutput has applied so far. An embedder that writes the output itself
+/// compares this with its own count to learn that everything it wrote has been
+/// parsed, without sending a query through the stream. Bytes that reach the
+/// terminal are counted while renderer_state.mutex is still held, so once the
+/// count covers a byte, anyone who then takes that mutex sees its effect.
+output_parsed_bytes: std.atomic.Value(u64) = .init(0),
+
 /// Last time the cursor was reset. This is used to prevent message
 /// flooding with cursor resets.
 last_cursor_reset: ?std.Io.Timestamp = null,
@@ -817,7 +825,13 @@ pub fn processOutput(self: *Termio, buf: []const u8) void {
         h.tmuxDbgReadEnter(buf.len);
         defer h.tmuxDbgReadDone(buf.len);
 
-        const rest = self.processOutputTmuxPrefix(buf) orelse return;
+        // Control-mode bytes never touch this surface's terminal.
+        // ROOTSHELL (id=termio-output-parsed-bytes)
+        const rest = self.processOutputTmuxPrefix(buf) orelse {
+            _ = self.output_parsed_bytes.fetchAdd(buf.len, .monotonic);
+            return;
+        };
+        _ = self.output_parsed_bytes.fetchAdd(buf.len - rest.len, .monotonic);
 
         var messaged = false;
         {
@@ -1023,6 +1037,9 @@ fn processOutputLocked(self: *Termio, buf: []const u8) void {
     } else {
         self.terminal_stream.nextSlice(buf);
     }
+
+    // ROOTSHELL (id=termio-output-parsed-bytes)
+    _ = self.output_parsed_bytes.fetchAdd(buf.len, .monotonic);
 
     // Terminal content changed on this exact surface. The surface-level
     // pending bit makes this O(1) and coalesces bursts before the app drains.

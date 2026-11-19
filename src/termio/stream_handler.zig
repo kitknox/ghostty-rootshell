@@ -1168,6 +1168,8 @@ pub const StreamHandler = struct {
             .start_hyperlink => try self.startHyperlink(value.uri, value.id),
             .clipboard_contents => try self.clipboardContents(value.kind, value.data),
             .iterm2_image => self.terminal.iterm2Image(self.alloc, value),
+            // ROOTSHELL (id=restore-pending-wrap): see stream.zig.
+            .restore_pending_wrap => self.terminal.screens.active.cursor.pending_wrap = value,
             .semantic_prompt => try self.semanticPrompt(value),
             .mouse_shape => try self.setMouseShape(value),
             .mouse_shape_reset => try self.setMouseShape(

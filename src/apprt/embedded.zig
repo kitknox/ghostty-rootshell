@@ -3222,129 +3222,7 @@ pub const CAPI = struct {
         surface: *Surface,
         out_len: *usize,
     ) ?[*]const u8 {
-        const core_surface = &surface.core_surface;
-        core_surface.renderer_state.mutex.lockUncancelable(global.io());
-        defer core_surface.renderer_state.mutex.unlock(global.io());
-
-        const t: *terminal.Terminal = uiTerminalLocked(core_surface);
-        const screen = t.screens.get(.primary) orelse return null;
-        _ = screen.pages.getBottomRight(.screen) orelse return null;
-
-        const tl_active = screen.pages.getTopLeft(.active);
-        const br_active = screen.pages.getBottomRight(.active) orelse return null;
-
-        // Adjust the scrollback/active boundary so it doesn't split a
-        // soft-wrapped line. If the last scrollback row has wrap=true,
-        // the first active row is a continuation. Walk the boundary
-        // forward (into the active area) until we find a row that is
-        // NOT a wrap continuation, keeping the full wrapped line in the
-        // scrollback pass to preserve unwrap continuity.
-        var adjusted_tl_active = tl_active;
-        var boundary_offset: usize = 0;
-        while (true) {
-            const above = adjusted_tl_active.up(1) orelse break;
-            if (!above.rowAndCell().row.wrap) break;
-            // Row above has wrap=true, so adjusted_tl_active is a
-            // continuation. Move it forward past this row.
-            adjusted_tl_active = adjusted_tl_active.down(1) orelse break;
-            boundary_offset += 1;
-        }
-
-        var aw: std.Io.Writer.Allocating = .init(global.alloc());
-
-        const fmt_opts: terminal.formatter.Options = .{
-            .emit = .vt,
-            .unwrap = true,
-            .trim = false,
-            .palette = &t.colors.palette.current,
-        };
-
-        // Phase 1: Dump scrollback (everything above the adjusted active
-        // boundary). We check if there's a row above the boundary; if so,
-        // scrollback exists and we dump it separately.
-        const has_scrollback = adjusted_tl_active.up(1) != null;
-        if (has_scrollback) {
-            const tl_screen = screen.pages.getTopLeft(.screen);
-            var br_scrollback = adjusted_tl_active.up(1).?;
-            br_scrollback.x = screen.pages.cols - 1;
-
-            var scrollback_fmt: terminal.formatter.ScreenFormatter = .init(screen, fmt_opts);
-            scrollback_fmt.content = .{
-                .selection = terminal.Selection.init(tl_screen, br_scrollback, false),
-            };
-            scrollback_fmt.format(&aw.writer) catch {
-                aw.deinit();
-                return null;
-            };
-
-            // Emit LF × rows to push scrollback content into the
-            // scrollback buffer. Unlike SU (which scrolls regardless of
-            // cursor position and can inject blank rows into history),
-            // LF first moves the cursor down through existing blank rows
-            // without scrolling, then only scrolls when it reaches the
-            // bottom margin — so only actual content enters scrollback.
-            for (0..screen.pages.rows) |_| {
-                aw.writer.writeByte('\n') catch {
-                    aw.deinit();
-                    return null;
-                };
-            }
-        }
-
-        // Phase 2: Emit active area on a clean viewport.
-        // Reset SGR, home the cursor, then clear from home before writing
-        // active content. The earlier scrollback replay may leave wider
-        // historical rows in the viewport; clearing here prevents shorter
-        // active rows (for example prompts) from drawing over stale cells.
-        aw.writer.writeAll("\x1b[0m\x1b[H\x1b[J") catch {
-            aw.deinit();
-            return null;
-        };
-
-        var active_fmt: terminal.formatter.ScreenFormatter = .init(screen, fmt_opts);
-        active_fmt.content = .{
-            .selection = terminal.Selection.init(adjusted_tl_active, br_active, false),
-        };
-        active_fmt.format(&aw.writer) catch {
-            aw.deinit();
-            return null;
-        };
-
-        // Erase from cursor to end of display (ED 0). This clears any
-        // remaining viewport rows below the active content, adapting
-        // correctly to any terminal size on restore.
-        // Reset SGR first so the erase uses default background color.
-        aw.writer.writeAll("\x1b[0m\x1b[J") catch {
-            aw.deinit();
-            return null;
-        };
-
-        // Position cursor within the active area. Adjust for any rows
-        // that were moved from the active area into the scrollback pass
-        // due to wrap continuation boundary adjustment.
-        const cursor = screen.cursor;
-        const cursor_y: usize = cursor.y;
-        const adjusted_y = if (cursor_y >= boundary_offset)
-            cursor_y - boundary_offset
-        else
-            0;
-        aw.writer.print("\x1b[{d};{d}H", .{ adjusted_y + 1, @as(usize, cursor.x) + 1 }) catch {
-            aw.deinit();
-            return null;
-        };
-
-        const text = aw.toOwnedSliceSentinel(0) catch {
-            aw.deinit();
-            return null;
-        };
-
-        if (text.len == 0) {
-            global.alloc().free(text);
-            return null;
-        }
-
-        out_len.* = text.len;
-        return text.ptr;
+        return dumpScreen(surface, out_len, terminal.restoration.writePrimaryScreen);
     }
 
     /// Dump the alternate screen active viewport as ANSI-styled text.
@@ -3356,65 +3234,149 @@ pub const CAPI = struct {
         surface: *Surface,
         out_len: *usize,
     ) ?[*]const u8 {
+        return dumpScreen(surface, out_len, terminal.restoration.writeAlternateScreen);
+    }
+
+    fn dumpScreen(
+        surface: *Surface,
+        out_len: *usize,
+        comptime write: fn (*const terminal.Terminal, *std.Io.Writer) std.Io.Writer.Error!bool,
+    ) ?[*]const u8 {
         const core_surface = &surface.core_surface;
         core_surface.renderer_state.mutex.lockUncancelable(global.io());
         defer core_surface.renderer_state.mutex.unlock(global.io());
 
-        const t: *terminal.Terminal = uiTerminalLocked(core_surface);
-        const screen = t.screens.get(.alternate) orelse return null;
-        const br_active = screen.pages.getBottomRight(.active) orelse return null;
-        const tl_active = screen.pages.getTopLeft(.active);
-
         var aw: std.Io.Writer.Allocating = .init(global.alloc());
-
-        const fmt_opts: terminal.formatter.Options = .{
-            .emit = .vt,
-            .unwrap = false,
-            .trim = false,
-            .palette = &t.colors.palette.current,
-        };
-
-        // Home cursor, then emit the active viewport.
-        aw.writer.writeAll("\x1b[H") catch {
+        const wrote = write(uiTerminalLocked(core_surface), &aw.writer) catch false;
+        if (!wrote or aw.written().len == 0) {
             aw.deinit();
             return null;
-        };
-
-        var active_fmt: terminal.formatter.ScreenFormatter = .init(screen, fmt_opts);
-        active_fmt.content = .{
-            .selection = terminal.Selection.init(tl_active, br_active, false),
-        };
-        active_fmt.format(&aw.writer) catch {
-            aw.deinit();
-            return null;
-        };
-
-        // Reset SGR and erase from cursor to end of display.
-        aw.writer.writeAll("\x1b[0m\x1b[J") catch {
-            aw.deinit();
-            return null;
-        };
-
-        // Position cursor.
-        const cursor = screen.cursor;
-        aw.writer.print("\x1b[{d};{d}H", .{ @as(usize, cursor.y) + 1, @as(usize, cursor.x) + 1 }) catch {
-            aw.deinit();
-            return null;
-        };
-
+        }
         const text = aw.toOwnedSliceSentinel(0) catch {
             aw.deinit();
             return null;
         };
-
-        if (text.len == 0) {
-            global.alloc().free(text);
-            return null;
-        }
-
         out_len.* = text.len;
         return text.ptr;
     }
+
+    // ROOTSHELL BEGIN FROZEN-ABI (id=embedded-restoration-snapshot)
+    // what:    the restoration snapshot and parse-progress C API the iOS app's
+    //          scrollback persistence uses instead of mirroring VT state or
+    //          sending queries through the output stream.
+    // reapply: re-add inside the CAPI struct; keep RestorationSnapshot
+    //          byte-for-byte in sync with ghostty_surface_restoration_s in
+    //          include/ghostty.h, and only append fields.
+    const RestorationSnapshot = extern struct {
+        ptr: ?[*]const u8 = null,
+        len: usize = 0,
+        primary_offset: usize = 0,
+        primary_len: usize = 0,
+        parsed_bytes: u64 = 0,
+        capture: u64 = 0,
+    };
+
+    /// Numbers the captures of all surfaces. Advanced with the surface's
+    /// lock held, so two captures of one surface compare in the order
+    /// their contents were read.
+    var restoration_captures: std.atomic.Value(u64) = .init(0);
+
+    /// Snapshot the displayed terminal as VT bytes that rebuild it in a fresh
+    /// surface: see terminal/restoration.zig. `primary_offset`/`primary_len`
+    /// locate the primary screen dump (the bytes
+    /// ghostty_surface_dump_primary_screen returns) inside `ptr`, and
+    /// `parsed_bytes` is the ghostty_surface_parsed_bytes value the snapshot
+    /// reflects. Everything is read under one lock, so the parts agree.
+    /// `capture` is greater than that of every earlier capture of this
+    /// surface, so an embedder that reads on one thread and stores on
+    /// another can tell which of two captures is the later one.
+    /// Returns false, leaving `out` zeroed, if the primary screen is empty or
+    /// the parser stopped inside a sequence or a UTF-8 character: the bytes
+    /// rebuild the terminal, not the parser, so the rest of that sequence
+    /// would be printed as text when the program's output resumes. Also
+    /// false for a tmux pane surface, whose parser lives in its gateway.
+    /// Free `ptr` with ghostty_surface_free_dump(ptr, len).
+    export fn ghostty_surface_restoration_snapshot(
+        surface: *Surface,
+        out: *RestorationSnapshot,
+    ) bool {
+        return captureRestoration(surface, out, .snapshot);
+    }
+
+    /// ghostty_surface_restoration_snapshot for an embedder that only stores
+    /// the primary screen dump: `ptr` holds that dump alone, with the same
+    /// `parsed_bytes` and `capture`. The alternate screen and the terminal
+    /// state are not serialized, and where the parser stopped doesn't
+    /// matter: nothing resumes into a terminal restored from a dump alone.
+    export fn ghostty_surface_scrollback_capture(
+        surface: *Surface,
+        out: *RestorationSnapshot,
+    ) bool {
+        return captureRestoration(surface, out, .scrollback);
+    }
+
+    fn captureRestoration(
+        surface: *Surface,
+        out: *RestorationSnapshot,
+        comptime what: enum { snapshot, scrollback },
+    ) bool {
+        out.* = .{};
+        const core_surface = &surface.core_surface;
+        core_surface.renderer_state.mutex.lockUncancelable(global.io());
+        defer core_surface.renderer_state.mutex.unlock(global.io());
+
+        if (what == .snapshot) {
+            const io = &core_surface.io;
+            // A tmux pane shows a terminal its gateway's viewer feeds
+            // through a parser of its own, which this surface can't
+            // inspect, and tmux rebuilds panes itself on reattach.
+            if (io.backend == .tmux) return false;
+            // While the tmux control channel is hooked the parser moves
+            // under tmux_mutex alone (renderer -> tmux is the legal order).
+            // It then sits inside the control DCS, so a gateway gives no
+            // snapshot for as long as control mode lasts.
+            io.tmux_mutex.lockUncancelable(global.io());
+            const ground = io.terminal_stream.ground();
+            io.tmux_mutex.unlock(global.io());
+            if (!ground) return false;
+        }
+
+        const t = uiTerminalLocked(core_surface);
+        var aw: std.Io.Writer.Allocating = .init(global.alloc());
+        const range: ?terminal.restoration.Range = switch (what) {
+            .snapshot => terminal.restoration.writeSnapshot(t, &aw) catch null,
+            .scrollback => range: {
+                const wrote = terminal.restoration.writePrimaryScreen(t, &aw.writer) catch false;
+                break :range if (wrote) .{ .offset = 0, .len = aw.written().len } else null;
+            },
+        };
+        const primary = range orelse {
+            aw.deinit();
+            return false;
+        };
+        const text = aw.toOwnedSliceSentinel(0) catch {
+            aw.deinit();
+            return false;
+        };
+        out.* = .{
+            .ptr = text.ptr,
+            .len = text.len,
+            .primary_offset = primary.offset,
+            .primary_len = primary.len,
+            .parsed_bytes = core_surface.io.output_parsed_bytes.load(.monotonic),
+            .capture = restoration_captures.fetchAdd(1, .monotonic) + 1,
+        };
+        return true;
+    }
+
+    /// How many bytes written to the surface's pty the terminal has parsed so
+    /// far. An embedder that writes the output itself (external IO) compares
+    /// this with its own count to learn that everything it wrote has taken
+    /// effect. Lock-free; callable from any thread.
+    export fn ghostty_surface_parsed_bytes(surface: *Surface) u64 {
+        return surface.core_surface.io.output_parsed_bytes.load(.monotonic);
+    }
+    // ROOTSHELL END FROZEN-ABI (id=embedded-restoration-snapshot)
 
     /// Returns true if the terminal's alternate screen is currently active
     /// (e.g., a TUI app like vim/helix is running). Used by the iOS app to

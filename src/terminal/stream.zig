@@ -138,6 +138,17 @@ pub const Action = union(Key) {
     xt_checksum_extension: XtChecksumExtension,
     program_status: ProgramStatus,
     iterm2_image: osc.Command.Iterm2Image,
+    /// ROOTSHELL (id=restore-pending-wrap): leave the cursor with a wrap
+    /// pending where it stands (true) or clear one (false). Sent as
+    /// `CSI ? 7502 h` and `l`, but not a mode: nothing is stored, so it is
+    /// kept out of the mode table and a query reports it as unknown. A
+    /// restoration replay (restoration.zig) needs it, because printing only
+    /// sets a pending wrap at the right margin or in the last column, while
+    /// DECRC and a screen switch can leave one anywhere.
+    restore_pending_wrap: bool,
+
+    /// The parameter `restore_pending_wrap` is sent with.
+    pub const restore_pending_wrap_param = 7502;
 
     pub const Key = lib.Enum(
         lib.target,
@@ -246,6 +257,7 @@ pub const Action = union(Key) {
             "xt_checksum_extension",
             "program_status",
             "iterm2_image",
+            "restore_pending_wrap",
         },
     );
 
@@ -2062,6 +2074,9 @@ pub fn Stream(comptime H: type) type {
                     for (input.params) |mode_int| {
                         if (modes.modeFromInt(mode_int, ansi_mode)) |mode| {
                             self.handler.vt(.set_mode, .{ .mode = mode });
+                        } else if (!ansi_mode and mode_int == streampkg.Action.restore_pending_wrap_param) {
+                            // ROOTSHELL (id=restore-pending-wrap)
+                            self.handler.vt(.restore_pending_wrap, true);
                         } else {
                             logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
                         }
@@ -2083,6 +2098,9 @@ pub fn Stream(comptime H: type) type {
                     for (input.params) |mode_int| {
                         if (modes.modeFromInt(mode_int, ansi_mode)) |mode| {
                             self.handler.vt(.reset_mode, .{ .mode = mode });
+                        } else if (!ansi_mode and mode_int == streampkg.Action.restore_pending_wrap_param) {
+                            // ROOTSHELL (id=restore-pending-wrap)
+                            self.handler.vt(.restore_pending_wrap, false);
                         } else {
                             logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
                         }

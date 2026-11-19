@@ -1587,6 +1587,30 @@ GHOSTTY_API const char* ghostty_surface_dump_primary_screen(ghostty_surface_t, u
 GHOSTTY_API void ghostty_surface_free_dump(const char*, uintptr_t);
 GHOSTTY_API bool ghostty_surface_is_alternate_active(ghostty_surface_t);
 GHOSTTY_API bool ghostty_surface_try_is_alternate_active(ghostty_surface_t, bool*);
+// ROOTSHELL FROZEN-ABI (id=embedded-restoration-snapshot): only append fields.
+// `ptr` holds VT bytes that rebuild the terminal in a fresh surface (both
+// screens, modes, keyboard stacks, saved cursors, margins, pen and cursor);
+// free it with ghostty_surface_free_dump(ptr, len). The primary screen dump
+// occupies [primary_offset, primary_offset + primary_len). `parsed_bytes` is
+// the ghostty_surface_parsed_bytes value the snapshot reflects. `capture` is
+// greater than that of every earlier capture of the same surface. No
+// snapshot is given while the parser is inside a sequence.
+typedef struct {
+  const char* ptr;
+  uintptr_t len;
+  uintptr_t primary_offset;
+  uintptr_t primary_len;
+  uint64_t parsed_bytes;
+  uint64_t capture;
+} ghostty_surface_restoration_s;
+GHOSTTY_API bool ghostty_surface_restoration_snapshot(ghostty_surface_t,
+                                                      ghostty_surface_restoration_s*);
+// The same for an embedder that stores the primary screen dump alone: `ptr`
+// holds only that dump, with the same `parsed_bytes` and `capture`.
+GHOSTTY_API bool ghostty_surface_scrollback_capture(ghostty_surface_t,
+                                                    ghostty_surface_restoration_s*);
+// Bytes written to the surface's pty that the terminal has parsed so far.
+GHOSTTY_API uint64_t ghostty_surface_parsed_bytes(ghostty_surface_t);
 
 #ifdef __APPLE__
 GHOSTTY_API void ghostty_surface_set_display_id(ghostty_surface_t, uint32_t);
